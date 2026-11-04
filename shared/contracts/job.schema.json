@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "On Dress Me job",
+  "type": "object",
+  "required": ["job_id", "status"],
+  "properties": {
+    "job_id": { "type": "string" },
+    "status": { "enum": ["queued", "running", "completed", "failed"] },
+    "kind": { "enum": ["avatar", "outfit"] },
+    "result": { "type": ["object", "null"] },
+    "error": { "type": ["string", "null"] }
+  },
+  "additionalProperties": true
+}

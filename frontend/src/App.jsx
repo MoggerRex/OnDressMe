@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import MannequinCanvas from './features/mannequin/MannequinScene';
 import { User, Shirt, Sparkles, Smile, Frown } from 'lucide-react';
 

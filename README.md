@@ -1,16 +1,42 @@
-# React + Vite
+# On Dress Me
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+On Dress Me es una plataforma web para colorimetria facial, armario digital, avatar corporal 3D y recomendaciones de outfits. El repositorio conserva el frontend React existente y prepara la separacion en cuatro computadoras descrita en `docs/architecture.md`.
 
-Currently, two official plugins are available:
+## Arquitectura
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+```text
+Computadora B (frontend) --HTTP--> Computadora A (backend central)
+                                      |
+                                      +--Redis: avatar_jobs--> Computadora C (worker avatar)
+                                      +--Redis: outfit_jobs--> Computadora D (worker outfits)
+                                      |
+                                      +--backend/storage: archivos persistentes
+```
 
-## React Compiler
+Tailscale se usa para la red privada entre equipos. Las direcciones se configuran mediante variables de entorno; no hay IPs fijas en el codigo. Redis coordina trabajos y estados, pero no almacena fotografias ni archivos 3D.
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+## Estructura
 
-## Expanding the ESLint configuration
+- `backend/`: API FastAPI, contratos, coordinacion de trabajos y almacenamiento central.
+- `frontend/`: aplicacion React/Vite, Three.js y React Three Fiber existente.
+- `workers/avatar/`: punto de entrada preparado para SAM 3D Body; no incluye el modelo.
+- `workers/outfits/`: punto de entrada preparado para Ollama/Llama; no incluye el modelo.
+- `shared/contracts/`: contratos JSON compartidos entre servicios.
+- `infra/`: Redis local para desarrollo; no se publica a Internet.
+- `docs/`: instrucciones por computadora y decisiones de arquitectura.
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+## Requisitos
+
+- Python 3.11 o posterior para backend y workers.
+- Node.js 20 o posterior para el frontend.
+- Redis accesible solo por la red privada de Tailscale.
+- Los modelos de IA, CUDA, PyTorch, SAM 3D Body y Llama se instalaran en una fase posterior.
+
+## Ejecucion rapida
+
+1. Levanta Redis en la computadora A: `docker compose -f infra/docker-compose.yml up -d redis`.
+2. Configura y ejecuta el backend siguiendo [docs/computer-a-backend.md](docs/computer-a-backend.md).
+3. Configura la URL del backend en `frontend/.env` y ejecuta [docs/computer-b-frontend.md](docs/computer-b-frontend.md).
+4. Prepara los workers con [docs/computer-c-avatar.md](docs/computer-c-avatar.md) y [docs/computer-d-outfits.md](docs/computer-d-outfits.md).
+
+Los workers fallan explicitamente los trabajos hasta que se integre el procesamiento real. No generan resultados simulados.
