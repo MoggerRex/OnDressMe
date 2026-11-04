@@ -34,9 +34,11 @@ Tailscale se usa para la red privada entre equipos. Las direcciones se configura
 
 ## Ejecucion rapida
 
-1. Levanta Redis en la computadora A: `docker compose -f infra/docker-compose.yml up -d redis`.
+1. Levanta Redis en la computadora A: `docker compose --env-file infra/.env -f infra/docker-compose.yml up -d redis`.
 2. Configura y ejecuta el backend siguiendo [docs/computer-a-backend.md](docs/computer-a-backend.md).
 3. Configura la URL del backend en `frontend/.env` y ejecuta [docs/computer-b-frontend.md](docs/computer-b-frontend.md).
 4. Prepara los workers con [docs/computer-c-avatar.md](docs/computer-c-avatar.md) y [docs/computer-d-outfits.md](docs/computer-d-outfits.md).
+
+Para la computadora central con Arch Linux, consulta [docs/computer-a-arch.md](docs/computer-a-arch.md).
 
 Los workers fallan explicitamente los trabajos hasta que se integre el procesamiento real. No generan resultados simulados.
