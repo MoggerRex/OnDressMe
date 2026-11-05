@@ -9,7 +9,6 @@ load_dotenv()
 
 
 def main() -> None:
-    once = os.getenv("WORKER_ONCE", "").lower() in {"1", "true", "yes"}
     redis = Redis.from_url(os.getenv("REDIS_URL", "redis://127.0.0.1:6379/0"), decode_responses=True)
     backend_url = os.getenv("BACKEND_URL", "http://127.0.0.1:8000").rstrip("/")
     token = os.getenv("WORKER_TOKEN", "")
@@ -24,8 +23,6 @@ def main() -> None:
         with httpx.Client(timeout=30) as client:
             response = client.post(f"{backend_url}/api/internal/jobs/{job_id}/result", json=payload, headers=headers)
             response.raise_for_status()
-        if once:
-            return
 
 
 if __name__ == "__main__":
