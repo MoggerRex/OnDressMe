@@ -2,6 +2,10 @@
 
 La arquitectura sigue el documento tecnico de On Dress Me:
 
+La computadora central A ahora es `desktop-vs5lm9k` (Windows), con IP Tailscale
+`100.82.214.123`. Todas las URLs de los demas equipos deben apuntar a esa IP;
+no uses la direccion anterior `100.120.77.108`.
+
 | Equipo | Responsabilidad | Puerto sugerido |
 |---|---|---:|
 | A | FastAPI, OpenCV/NumPy, Redis, almacenamiento y coordinacion | 8000 |

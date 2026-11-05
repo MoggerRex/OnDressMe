@@ -13,7 +13,10 @@ Computadora B (frontend) --HTTP--> Computadora A (backend central)
                                       +--backend/storage: archivos persistentes
 ```
 
-Tailscale se usa para la red privada entre equipos. Las direcciones se configuran mediante variables de entorno; no hay IPs fijas en el codigo. Redis coordina trabajos y estados, pero no almacena fotografias ni archivos 3D.
+Tailscale se usa para la red privada entre equipos. La computadora central A es
+`desktop-vs5lm9k` (Windows), actualmente en `100.82.214.123`; las direcciones
+operativas se configuran mediante variables de entorno. Redis coordina trabajos
+y estados, pero no almacena fotografias ni archivos 3D.
 
 ## Estructura
 
