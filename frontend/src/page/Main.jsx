@@ -1,20 +1,24 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import {
 	ArrowRight,
 	Check,
-	Footprints,
+	ChevronLeft,
+	ChevronRight,
 	Glasses,
+	Info,
 	Maximize2,
+	Moon,
 	Plus,
 	Shirt,
 	Sparkles,
+	Sun,
 	UserRound,
-	Watch,
 } from 'lucide-react';
+import { PiBaseballCap, PiCoatHanger, PiPants, PiSneaker } from 'react-icons/pi';
 import MannequinCanvas from '../features/mannequin/MannequinScene.jsx';
 import '../App.css';
 
-const categories = ['Camisas', 'Pantalones', 'Accesorios', 'Tenis', 'Gorras'];
+const categories = ['Camisas', 'Pantalones', 'Accesorios', 'Calzado', 'Gorras'];
 
 const wardrobe = [
 	{ id: 'sweater-blue', name: 'Suéter azul', category: 'Camisas', type: 'shirt', color: '#36546d', shade: 'Azul tinta' },
@@ -27,7 +31,7 @@ const wardrobe = [
 	{ id: 'charcoal-pants', name: 'Pantalón carbón', category: 'Pantalones', type: 'pants', color: '#34353a', shade: 'Carbón' },
 	{ id: 'silver-watch', name: 'Reloj plata', category: 'Accesorios', type: 'accessory', color: '#b7bdc8', shade: 'Plata' },
 	{ id: 'black-glasses', name: 'Gafas ónix', category: 'Accesorios', type: 'accessory', color: '#202126', shade: 'Ónix' },
-	{ id: 'white-sneakers', name: 'Tenis hielo', category: 'Tenis', type: 'shoes', color: '#e5e7eb', shade: 'Hielo' },
+	{ id: 'white-sneakers', name: 'Tenis hielo', category: 'Calzado', type: 'shoes', color: '#e5e7eb', shade: 'Hielo' },
 	{ id: 'pine-cap', name: 'Gorra pino', category: 'Gorras', type: 'hat', color: '#315b58', shade: 'Pino' },
 ];
 
@@ -49,14 +53,61 @@ const stageColors = {
 
 const categoryIcons = {
 	Camisas: Shirt,
-	Pantalones: Shirt,
-	Accesorios: Watch,
-	Tenis: Footprints,
-	Gorras: Glasses,
+	Pantalones: PiPants,
+	Accesorios: Glasses,
+	Calzado: PiSneaker,
+	Gorras: PiBaseballCap,
 };
 
+const metricFields = [
+	{ key: 'height', label: 'Altura', min: 140, max: 205, unit: 'cm' },
+	{ key: 'weight', label: 'Peso', min: 40, max: 140, unit: 'kg' },
+	{ key: 'complexion', label: 'Complexión', min: 0, max: 100 },
+	{ key: 'bodyFat', label: 'Grasa corporal', min: 5, max: 50, unit: '%' },
+	{ key: 'muscle', label: 'Masa muscular', min: 10, max: 60, unit: '%' },
+	{ key: 'shoulders', label: 'Hombros', min: 32, max: 60, unit: 'cm' },
+	{ key: 'waist', label: 'Cintura', min: 50, max: 130, unit: 'cm' },
+	{ key: 'hips', label: 'Cadera', min: 60, max: 145, unit: 'cm' },
+];
+
+function formatMetric(field, value) {
+	if (field.key === 'complexion') {
+		if (value < 35) return 'Delgada';
+		if (value > 65) return 'Robusta';
+		return 'Media';
+	}
+	return `${value} ${field.unit}`;
+}
+
+function CategoryTab({ category, isActive, onClick }) {
+	const Icon = categoryIcons[category];
+
+	return (
+		<button
+			aria-label={category}
+			aria-selected={isActive}
+			className={isActive ? 'category-tab is-active' : 'category-tab'}
+			onClick={onClick}
+			role="tab"
+			title={category}
+			type="button"
+		>
+			<Icon aria-hidden="true" size={17} strokeWidth={1.7} />
+		</button>
+	);
+}
+
 export default function Main() {
+	const [activeView, setActiveView] = useState('DressMe');
+	const [theme, setTheme] = useState(() => {
+		try {
+			return window.localStorage.getItem('ondressme-theme') === 'light' ? 'light' : 'dark';
+		} catch {
+			return 'dark';
+		}
+	});
 	const [activeCategory, setActiveCategory] = useState('Camisas');
+	const closetTrackRef = useRef(null);
 	const [selectedItems, setSelectedItems] = useState({
 		shirt: wardrobe[0],
 		pants: wardrobe[6],
@@ -66,43 +117,135 @@ export default function Main() {
 	});
 	const [undertone, setUndertone] = useState('Neutro');
 	const [saved, setSaved] = useState(false);
+	const [measurementsSaved, setMeasurementsSaved] = useState(false);
+	const [bodyMetrics, setBodyMetrics] = useState({
+		height: 173,
+		weight: 68,
+		complexion: 50,
+		bodyFat: 22,
+		muscle: 36,
+		shoulders: 44,
+		waist: 78,
+		hips: 96,
+	});
 
 	const visibleItems = wardrobe.filter((item) => item.category === activeCategory);
 	const activeSelectedItem = visibleItems.find((item) => selectedItems[item.type].id === item.id);
 	const ActiveCategoryIcon = categoryIcons[activeCategory];
+	const bmi = bodyMetrics.weight / ((bodyMetrics.height / 100) ** 2);
+	const bmiCategory = bmi < 18.5 ? 'bajo' : bmi < 25 ? 'normal' : bmi < 30 ? 'alto' : 'obesidad';
 
 	function previewItem(item) {
 		setSelectedItems((current) => ({ ...current, [item.type]: item }));
 		setSaved(false);
 	}
 
+	function scrollCloset(direction) {
+		closetTrackRef.current?.scrollBy({ left: direction * 300, behavior: 'smooth' });
+	}
+
+	function toggleTheme() {
+		const nextTheme = theme === 'dark' ? 'light' : 'dark';
+		setTheme(nextTheme);
+		try {
+			window.localStorage.setItem('ondressme-theme', nextTheme);
+		} catch {
+			return;
+		}
+	}
+
 	return (
-		<div className="dressme-app">
+		<div className="dressme-app" data-theme={theme}>
 			<header className="topbar">
 				<a className="brand" href="#inicio" aria-label="OnDressMe, inicio">
 					<span className="brand-mark">O</span>
 					<span>ONDRESSME</span>
 				</a>
 				<nav className="main-nav" aria-label="Navegación principal">
-					<a className="nav-link is-current" href="#simulador">DressMe</a>
-					<a className="nav-link" href="#avatar">Avatar</a>
-					<a className="nav-link" href="#closet">Closet</a>
+					<a className={activeView === 'DressMe' ? 'nav-link is-current' : 'nav-link'} href="#simulador" onClick={() => setActiveView('DressMe')}>DressMe</a>
+					<a className={activeView === 'Avatar' ? 'nav-link is-current' : 'nav-link'} href="#avatar" onClick={() => setActiveView('Avatar')}>Avatar</a>
+					<a className={activeView === 'Closet' ? 'nav-link is-current' : 'nav-link'} href="#closet" onClick={() => setActiveView('Closet')}>Closet</a>
 					<a className="nav-link" href="#perfil">Perfil</a>
 				</nav>
-				<button className="profile-menu" type="button">
-					<span className="profile-initials">EG</span>
-					<span className="profile-copy"><strong>Eva García</strong><small>Invierno profundo</small></span>
-					<ArrowRight size={15} aria-hidden="true" />
-				</button>
+				<div className="header-actions">
+					<button
+						aria-label={theme === 'dark' ? 'Cambiar a tema claro' : 'Cambiar a tema oscuro'}
+						aria-pressed={theme === 'light'}
+						className="theme-toggle"
+						onClick={toggleTheme}
+						title={theme === 'dark' ? 'Cambiar a tema claro' : 'Cambiar a tema oscuro'}
+						type="button"
+					>
+						{theme === 'dark' ? <Sun size={18} /> : <Moon size={18} />}
+					</button>
+					<button className="profile-menu" type="button">
+						<span className="profile-initials">EG</span>
+						<span className="profile-copy"><strong>Eva García</strong><small>Invierno profundo</small></span>
+						<ArrowRight size={15} aria-hidden="true" />
+					</button>
+				</div>
 			</header>
 
 			<main className="workspace" id="inicio">
+				{activeView === 'Closet' ? (
+					<section className="closet-library" id="closet" aria-labelledby="closet-library-title">
+						<div className="closet-library-heading">
+							<span className="eyebrow">Clóset digital</span>
+							<div className="closet-library-title-row">
+								<h1 id="closet-library-title">Todo tu estilo, en un solo lugar.</h1>
+								<button className="outline-button add-closet-item" type="button"><span className="add-garment-icon" aria-hidden="true"><Shirt size={16} /><Plus size={9} /></span> Añadir prenda</button>
+							</div>
+						</div>
+						<div className="closet-library-toolbar">
+							<div className="category-tabs" role="tablist" aria-label="Categorías de prendas">
+								{categories.map((category) => (
+									<CategoryTab
+										category={category}
+										isActive={activeCategory === category}
+										key={category}
+										onClick={() => setActiveCategory(category)}
+									/>
+								))}
+							</div>
+							<div className="closet-carousel-controls" aria-label="Recorrer prendas">
+								<button className="icon-button" onClick={() => scrollCloset(-1)} type="button" aria-label="Prendas anteriores"><ChevronLeft size={18} /></button>
+								<button className="icon-button" onClick={() => scrollCloset(1)} type="button" aria-label="Prendas siguientes"><ChevronRight size={18} /></button>
+							</div>
+						</div>
+						<div className="closet-carousel">
+							<div className="closet-ruler" aria-hidden="true"><span /><i /><span /></div>
+							<div className="closet-card-track" ref={closetTrackRef}>
+								{visibleItems.map((item, index) => {
+									const ItemIcon = categoryIcons[item.category];
+									const isSelected = selectedItems[item.type].id === item.id;
+									return (
+										<button
+											aria-label={item.name}
+											aria-pressed={isSelected}
+											className={isSelected ? 'closet-look-card is-selected' : 'closet-look-card'}
+											key={item.id}
+											onClick={() => previewItem(item)}
+											style={{ '--item-index': index, '--garment-color': item.color }}
+											type="button"
+										>
+											<span className="closet-card-hanger"><ItemIcon size={17} strokeWidth={1.5} /></span>
+											<span className="closet-card-visual"><ItemIcon className="closet-card-garment" size={150} strokeWidth={1.1} />{isSelected && <span className="closet-card-check"><Check size={12} /></span>}</span>
+											<span className="closet-card-color" />
+										</button>
+									);
+								})}
+							</div>
+						</div>
+						<div className="closet-library-footer"><span>{visibleItems.length} prendas en {activeCategory.toLowerCase()}</span><button type="button" onClick={() => setActiveView('DressMe')}>Volver al simulador <ArrowRight size={15} /></button></div>
+					</section>
+				) : (
+				<>
 				<div className="workspace-grid">
 					<section className="simulator-panel" id="simulador" aria-labelledby="simulator-title">
 						<div className="panel-heading">
 							<div>
 								<span className="eyebrow">Simulador</span>
-								<h1 id="simulator-title">Tu maniquí</h1>
+								<h1 id="simulator-title">{activeView === 'Avatar' ? 'Tu avatar' : 'Tu maniquí'}</h1>
 							</div>
 							<button className="icon-button" type="button" title="Ampliar visor" aria-label="Ampliar visor">
 								<Maximize2 size={17} />
@@ -142,12 +285,12 @@ export default function Main() {
 								accessoryColor={selectedItems.accessory.color}
 								shoesColor={selectedItems.shoes.color}
 								hatColor={selectedItems.hat.color}
+								bodyMetrics={bodyMetrics}
 							/>
 							<div className="rotate-hint"><span>↔</span> Arrastra para rotar</div>
 						</div>
 						<div className="look-score" id="perfil">
-							<div className="score-number">94<small>/100</small></div>
-							<div className="score-copy"><strong>Este look armoniza contigo</strong><span>El azul grisáceo equilibra tu contraste natural.</span></div>
+		
 							<button className={saved ? 'outline-button is-saved' : 'outline-button'} onClick={() => setSaved(!saved)} type="button">
 								{saved ? <Check size={15} /> : <Check size={15} />}
 								{saved ? 'Look guardado' : 'Guardar look'}
@@ -155,6 +298,48 @@ export default function Main() {
 						</div>
 					</section>
 
+					{activeView === 'Avatar' ? (
+						<aside className="metrics-panel" id="avatar-metrics" aria-labelledby="metrics-title">
+							<div className="metrics-heading">
+								<div className="closet-icon"><UserRound size={18} /></div>
+								<div><span className="eyebrow">Métricas corporales</span><h2 id="metrics-title">Define tu cuerpo</h2></div>
+							</div>
+							<div className="metric-summary">
+								<div className="metric-card"><small>Altura</small><strong>{bodyMetrics.height}<span> cm</span></strong></div>
+								<div className="metric-card"><small>Peso</small><strong>{bodyMetrics.weight}<span> kg</span></strong></div>
+								<div className="metric-card"><small>IMC</small><strong>{bmi.toFixed(1)}<span> {bmiCategory}</span></strong></div>
+							</div>
+							<div className="measurements-title">
+								<strong>Proporciones generales</strong>
+								<small>Los cambios se reflejan en el avatar</small>
+							</div>
+							<div className="measurement-grid">
+								{metricFields.map((field) => (
+									<label className="measure-control" key={field.key}>
+										<span className="measure-label"><span>{field.label}</span><strong>{formatMetric(field, bodyMetrics[field.key])}</strong></span>
+										<input
+											aria-label={field.label}
+											max={field.max}
+											min={field.min}
+											onChange={(event) => {
+												setBodyMetrics((current) => ({ ...current, [field.key]: Number(event.target.value) }));
+												setMeasurementsSaved(false);
+											}}
+											step="1"
+											type="range"
+											value={bodyMetrics[field.key]}
+										/>
+									</label>
+								))}
+							</div>
+							<div className="measurements-footer">
+								<span><Info size={13} /> Tus medidas se guardan en este dispositivo.</span>
+								<button className={measurementsSaved ? 'outline-button is-saved' : 'outline-button'} onClick={() => setMeasurementsSaved(true)} type="button">
+									<Check size={14} />{measurementsSaved ? 'Medidas guardadas' : 'Guardar medidas'}
+								</button>
+							</div>
+						</aside>
+					) : (
 					<aside className="closet-panel" id="closet" aria-labelledby="closet-title">
 						<div className="closet-heading">
 							<div className="closet-icon"><Shirt size={18} /></div>
@@ -162,16 +347,12 @@ export default function Main() {
 						</div>
 						<div className="category-tabs" role="tablist" aria-label="Categorías de prendas">
 							{categories.map((category) => (
-								<button
-									aria-selected={activeCategory === category}
-									className={activeCategory === category ? 'category-tab is-active' : 'category-tab'}
+								<CategoryTab
+									category={category}
+									isActive={activeCategory === category}
 									key={category}
 									onClick={() => setActiveCategory(category)}
-									role="tab"
-									type="button"
-								>
-									{category}
-								</button>
+								/>
 							))}
 						</div>
 						<h3 className="items-heading">{activeCategory}<span>{visibleItems.length} prendas</span></h3>
@@ -188,6 +369,7 @@ export default function Main() {
 								const isSelected = selectedItems[item.type].id === item.id;
 								return (
 									<button
+										aria-label={item.name}
 										aria-pressed={isSelected}
 										className={isSelected ? 'wardrobe-item is-selected' : 'wardrobe-item'}
 										key={item.id}
@@ -199,15 +381,13 @@ export default function Main() {
 											<ItemIcon size={42} strokeWidth={1.35} />
 											{isSelected && <span className="garment-check"><Check size={12} strokeWidth={2.5} /></span>}
 										</span>
-										<strong>{item.name}</strong>
-										<small>{item.category}</small>
 									</button>
 								);
 							})}
 						</div>
 						<div className="closet-actions">
-							<button className="action-button" type="button"><UserRound size={15} /> Añadir prenda</button>
-							<button className="action-button" type="button">Ver clóset completo <ArrowRight size={15} /></button>
+							<button className="action-button" type="button"><span className="add-garment-icon" aria-hidden="true"><Shirt size={16} /><Plus size={9} /></span> Añadir prenda</button>
+							<button className="action-button" type="button">Ver clóset completo <PiCoatHanger size={15} /></button>
 						</div>
 						<div className="outfit-palette">
 							<div className="palette-title"><span className="eyebrow">Paleta del outfit</span><Sparkles size={14} /></div>
@@ -217,7 +397,8 @@ export default function Main() {
 								))}
 							</div>
 						</div>
-					</aside>
+						</aside>
+					)}
 				</div>
 
 				<section className="recommendation-panel" aria-labelledby="recommendation-title">
@@ -237,6 +418,8 @@ export default function Main() {
 					<button className="guide-button" type="button">Ver guía completa <ArrowRight size={16} /></button>
 					<button className="add-look-button" type="button" aria-label="Crear nuevo look"><Plus size={16} /></button>
 				</section>
+				</>
+				)}
 			</main>
 		</div>
 	);

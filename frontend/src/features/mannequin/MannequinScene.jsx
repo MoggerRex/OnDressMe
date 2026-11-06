@@ -1,9 +1,22 @@
 import { Canvas } from '@react-three/fiber';
 import { ContactShadows, Environment, OrbitControls } from '@react-three/drei';
 
-function Mannequin({ shirtColor, pantsColor, accessoryColor, shoesColor, hatColor }) {
+function Mannequin({ shirtColor, pantsColor, accessoryColor, shoesColor, hatColor, bodyMetrics }) {
+  const bmi = bodyMetrics.weight / ((bodyMetrics.height / 100) ** 2);
+  const heightScale = bodyMetrics.height / 173;
+  const widthScale = Math.min(1.25, Math.max(0.78,
+    1
+    + (bmi - 22.7) * 0.01
+    + (bodyMetrics.waist - 78) * 0.0015
+    + (bodyMetrics.shoulders - 44) * 0.002
+    + (bodyMetrics.hips - 96) * 0.001
+    + (bodyMetrics.bodyFat - 22) * 0.0007
+    - (bodyMetrics.muscle - 36) * 0.0005
+    + (bodyMetrics.complexion - 50) * 0.0006,
+  ));
+
   return (
-    <group position={[0, 0, 0]}>
+    <group position={[0, 0, 0]} scale={[widthScale, heightScale, widthScale]}>
       <mesh castShadow position={[0, 2.42, 0]} scale={[0.28, 0.34, 0.25]}>
         <sphereGeometry args={[1, 32, 32]} />
         <meshStandardMaterial color="#d39a76" roughness={0.72} />
@@ -68,7 +81,7 @@ function Mannequin({ shirtColor, pantsColor, accessoryColor, shoesColor, hatColo
   );
 }
 
-export default function MannequinCanvas({ shirtColor, pantsColor, accessoryColor, shoesColor, hatColor }) {
+export default function MannequinCanvas({ shirtColor, pantsColor, accessoryColor, shoesColor, hatColor, bodyMetrics }) {
   return (
     <Canvas
       camera={{ position: [3.8, 3.8, 6.5], fov: 34 }}
@@ -93,6 +106,7 @@ export default function MannequinCanvas({ shirtColor, pantsColor, accessoryColor
         pantsColor={pantsColor}
         shirtColor={shirtColor}
         shoesColor={shoesColor}
+        bodyMetrics={bodyMetrics}
       />
       <ContactShadows position={[0, 0.002, 0]} opacity={0.38} scale={4.5} blur={2.3} far={3.5} />
       <OrbitControls
