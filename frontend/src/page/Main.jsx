@@ -134,6 +134,13 @@ export default function Main() {
 	const ActiveCategoryIcon = categoryIcons[activeCategory];
 	const bmi = bodyMetrics.weight / ((bodyMetrics.height / 100) ** 2);
 	const bmiCategory = bmi < 18.5 ? 'bajo' : bmi < 25 ? 'normal' : bmi < 30 ? 'alto' : 'obesidad';
+	const outfitSlots = [
+		{ category: 'Camisas', item: selectedItems.shirt },
+		{ category: 'Pantalones', item: selectedItems.pants },
+		{ category: 'Accesorios', item: selectedItems.accessory },
+		{ category: 'Calzado', item: selectedItems.shoes },
+		{ category: 'Gorras', item: selectedItems.hat },
+	];
 
 	function previewItem(item) {
 		setSelectedItems((current) => ({ ...current, [item.type]: item }));
@@ -251,8 +258,9 @@ export default function Main() {
 								<Maximize2 size={17} />
 							</button>
 						</div>
+						<div className="simulator-stage-row">
 						<div
-							className="avatar-stage"
+							className={activeView === 'DressMe' ? 'avatar-stage has-outfit-slots' : 'avatar-stage'}
 							id="avatar"
 							style={{
 								'--stage-top': stageColors[undertone].top,
@@ -260,6 +268,31 @@ export default function Main() {
 								'--stage-floor': stageColors[undertone].floor,
 							}}
 						>
+							{activeView === 'DressMe' && (
+								<aside className="outfit-slots" aria-label="Prendas elegidas para el avatar">
+									<div className="outfit-slot-list">
+										{outfitSlots.map(({ category, item }) => {
+											const SlotIcon = categoryIcons[category];
+											return (
+												<button
+													aria-label={`${category}: ${item.name}`}
+													aria-pressed={activeCategory === category}
+													className={activeCategory === category ? 'outfit-slot is-active' : 'outfit-slot'}
+													key={category}
+													onClick={() => setActiveCategory(category)}
+													title={`${category}: ${item.name}`}
+													type="button"
+												>
+													<span className="outfit-slot-visual" style={{ '--garment-color': item.color }}>
+														<SlotIcon size={34} strokeWidth={1.5} />
+														<span className="outfit-slot-check"><Check size={10} strokeWidth={2.5} /></span>
+													</span>
+												</button>
+											);
+										})}
+									</div>
+								</aside>
+							)}
 							<div className="height-markers" aria-hidden="true">
 								<span>190</span><i /><span>175</span><i /><span>155</span><i />
 							</div>
@@ -288,6 +321,7 @@ export default function Main() {
 								bodyMetrics={bodyMetrics}
 							/>
 							<div className="rotate-hint"><span>↔</span> Arrastra para rotar</div>
+						</div>
 						</div>
 						<div className="look-score" id="perfil">
 		

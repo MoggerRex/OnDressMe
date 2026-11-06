@@ -221,6 +221,14 @@ button:focus-visible, a:focus-visible { outline: 2px solid #a7c7e5; outline-offs
 
 .workspace { width: min(1206px, calc(100% - 48px)); margin: 20px auto 34px; }
 .workspace-grid { display: grid; grid-template-columns: minmax(0, 1.85fr) minmax(330px, 1fr); gap: 12px; align-items: stretch; }
+.simulator-stage-row { min-width: 0; }
+.outfit-slots { position: absolute; z-index: 4; top: 8px; bottom: 8px; left: 8px; width: 82px; padding: 6px; border: 1px solid rgba(255,255,255,.18); background: rgba(24,24,28,.76); backdrop-filter: blur(5px); }
+.outfit-slot-list { display: grid; grid-template-rows: repeat(5, minmax(0, 1fr)); gap: 6px; height: 100%; margin-top: 0; }
+.outfit-slot { min-width: 0; height: 100%; display: grid; grid-template-rows: minmax(0, 1fr) auto; justify-items: center; gap: 4px; padding: 6px 4px; border: 1px solid #39393f; background: rgba(255,255,255,.015); color: #b6b5bc; font-size: 10px; cursor: pointer; transition: background .18s ease, border-color .18s ease, color .18s ease; }
+.outfit-slot:hover, .outfit-slot.is-active { border-color: #839eb5; background: rgba(167,199,229,.07); color: #f0eff0; }
+.outfit-slot-visual { position: relative; width: 100%; height: 42px; display: grid; place-items: center; overflow: hidden; background: radial-gradient(circle at 50% 40%, color-mix(in srgb, var(--garment-color), transparent 78%), transparent 72%), linear-gradient(145deg, #39393f, #2d2d32); color: var(--garment-color); }
+.outfit-slot-visual > svg { fill: color-mix(in srgb, var(--garment-color), transparent 18%); filter: drop-shadow(0 4px 6px rgba(0,0,0,.2)); }
+.outfit-slot-check { position: absolute; top: 4px; right: 4px; width: 17px; height: 17px; display: grid; place-items: center; border: 1px solid rgba(255,255,255,.2); border-radius: 50%; background: #e8edf0; color: #22252a; }
 .simulator-panel, .closet-panel, .metrics-panel, .recommendation-panel { border: 1px solid #35353a; background: rgba(28, 28, 32, .94); }
 .simulator-panel { min-width: 0; padding: 22px 22px 0; }
 .panel-heading { display: flex; align-items: center; justify-content: space-between; margin-bottom: 15px; }
@@ -230,6 +238,7 @@ button:focus-visible, a:focus-visible { outline: 2px solid #a7c7e5; outline-offs
 .icon-button:hover { color: white; border-color: #9c9ba3; }
 .avatar-stage { position: relative; height: clamp(350px, 40vw, 405px); overflow: hidden; background: linear-gradient(180deg, var(--stage-top) 0%, var(--stage-middle) 70%, var(--stage-floor) 100%); transition: background 420ms ease; }
 .avatar-stage canvas { position: absolute !important; z-index: 1; inset: 0; }
+.avatar-stage.has-outfit-slots .height-markers { display: none; }
 .height-markers { position: absolute; z-index: 2; top: 17%; left: 10px; display: flex; flex-direction: column; align-items: flex-start; gap: 5px; color: #c4c6ce; font-size: 8px; }
 .height-markers i { width: 12px; height: 1px; margin-bottom: 54px; background: rgba(220,222,228,.6); }
 .undertone-controls { position: absolute; z-index: 3; top: 15px; right: 13px; display: grid; gap: 5px; }
@@ -362,6 +371,7 @@ button:focus-visible, a:focus-visible { outline: 2px solid #a7c7e5; outline-offs
 }
 @media (max-width: 950px) {
   .workspace-grid { grid-template-columns: minmax(0, 1.45fr) minmax(295px, 1fr); }
+  .outfit-slots { width: 74px; padding: 5px; }
   .closet-panel { padding-inline: 14px; }
   .recommendation-panel { grid-template-columns: 1fr 1.5fr; gap: 18px; margin-top: 35px; }
   .guide-button { grid-column: 2; justify-self: end; min-height: 38px; }
@@ -390,6 +400,11 @@ button:focus-visible, a:focus-visible { outline: 2px solid #a7c7e5; outline-offs
   .closet-card-garment { width: clamp(125px, 42vw, 170px); height: clamp(125px, 42vw, 170px); }
   .closet-library-footer { padding-top: 12px; }
   .workspace-grid { grid-template-columns: 1fr; }
+  .outfit-slots { top: 6px; bottom: 6px; left: 6px; width: 52px; padding: 3px; }
+  .outfit-slot-list { gap: 3px; }
+  .outfit-slot { gap: 2px; padding: 3px 1px; font-size: 7px; }
+  .outfit-slot-visual { min-height: 32px; }
+  .outfit-slot-visual > svg { width: 34px; height: 34px; }
   .simulator-panel { padding: 17px 14px 0; }
   .avatar-stage { height: min(105vw, 390px); min-height: 320px; }
   .closet-panel { padding: 17px 14px; }
@@ -459,6 +474,9 @@ button:focus-visible, a:focus-visible { outline: 2px solid #a7c7e5; outline-offs
   .season-color small { font-size: 10px; }
 }
 @media (max-width: 420px) {
+  .outfit-slots { width: 48px; }
+  .outfit-slot { font-size: 6px; }
+  .outfit-slot-visual > svg { width: 32px; height: 32px; }
   .main-nav { justify-content: space-between; gap: 10px; padding-inline: 20px; }
   .nav-link { font-size: 12px; }
   .score-copy span { max-width: 175px; line-height: 1.35; }
@@ -500,6 +518,12 @@ button:focus-visible, a:focus-visible { outline: 2px solid #a7c7e5; outline-offs
 .dressme-app[data-theme='light'] .metrics-panel,
 .dressme-app[data-theme='light'] .recommendation-panel,
 .dressme-app[data-theme='light'] .closet-library { border-color: #d5d5d2; background: rgba(255,255,253,.94); }
+.dressme-app[data-theme='light'] .outfit-slots { border-color: rgba(80,80,84,.2); background: rgba(255,255,253,.78); }
+.dressme-app[data-theme='light'] .outfit-slot { border-color: #d4d4d1; background: rgba(40,40,42,.02); color: #5d5e64; }
+.dressme-app[data-theme='light'] .outfit-slot:hover,
+.dressme-app[data-theme='light'] .outfit-slot.is-active { border-color: #8299aa; background: rgba(91,126,150,.1); color: #303136; }
+.dressme-app[data-theme='light'] .outfit-slot-visual { background: radial-gradient(circle at 50% 40%, color-mix(in srgb, var(--garment-color), transparent 82%), transparent 72%), linear-gradient(145deg, #ececea, #e1e1df); }
+.dressme-app[data-theme='light'] .outfit-slot-check { border-color: #fff; background: #33363c; color: #fff; }
 .dressme-app[data-theme='light'] .eyebrow { color: #607d93; }
 .dressme-app[data-theme='light'] .panel-heading h1,
 .dressme-app[data-theme='light'] .closet-heading h2,
