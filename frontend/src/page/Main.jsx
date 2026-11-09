@@ -37,6 +37,23 @@ const wardrobe = [
 	{ id: 'pine-cap', name: 'Gorra pino', category: 'Gorras', type: 'hat', color: '#315b58', shade: 'Pino' },
 ];
 
+const defaultSavedLooks = [
+	{
+		id: 'saved-look-1',
+		name: 'Minimal índigo',
+		mood: 'Capas moderadas',
+		signature: 'sweater-blue|sand-pants|silver-watch|white-sneakers|pine-cap',
+		items: { shirt: wardrobe[0], pants: wardrobe[6], accessory: wardrobe[8], shoes: wardrobe[10], hat: wardrobe[11] },
+	},
+	{
+		id: 'saved-look-2',
+		name: 'Noche sobria',
+		mood: 'Urban chic',
+		signature: 'onyx-shirt|charcoal-pants|black-glasses|white-sneakers|pine-cap',
+		items: { shirt: wardrobe[3], pants: wardrobe[7], accessory: wardrobe[9], shoes: wardrobe[10], hat: wardrobe[11] },
+	},
+];
+
 const palette = [
 	{ name: 'Tu piel', color: '#cf916c' },
 	{ name: 'Ónix', color: '#101115' },
@@ -79,6 +96,10 @@ function formatMetric(field, value) {
 		return 'Media';
 	}
 	return `${value} ${field.unit}`;
+}
+
+function getLookSignature(items) {
+	return Object.values(items).map((item) => item.id).join('|');
 }
 
 function CategoryTab({ category, isActive, onClick }) {
@@ -132,7 +153,7 @@ export default function Main() {
 		hat: wardrobe[11],
 	});
 	const [undertone, setUndertone] = useState('Neutro');
-	const [saved, setSaved] = useState(false);
+	const [savedLooks, setSavedLooks] = useState(defaultSavedLooks);
 	const [measurementsSaved, setMeasurementsSaved] = useState(false);
 	const [bodyMetrics, setBodyMetrics] = useState({
 		height: 173,
@@ -145,6 +166,8 @@ export default function Main() {
 		hips: 96,
 	});
 
+	const currentLookSignature = getLookSignature(selectedItems);
+	const saved = savedLooks.some((look) => look.signature === currentLookSignature);
 	const visibleItems = wardrobe.filter((item) => item.category === activeCategory);
 	const activeSelectedItem = visibleItems.find((item) => selectedItems[item.type].id === item.id);
 	const ActiveCategoryIcon = categoryIcons[activeCategory];
@@ -160,7 +183,29 @@ export default function Main() {
 
 	function previewItem(item) {
 		setSelectedItems((current) => ({ ...current, [item.type]: item }));
-		setSaved(false);
+	}
+
+	function toggleSaveCurrentLook() {
+		const signature = currentLookSignature;
+		const alreadySaved = savedLooks.some((look) => look.signature === signature);
+
+		if (alreadySaved) {
+			setSavedLooks((current) => current.filter((look) => look.signature !== signature));
+			return;
+		}
+
+		setSavedLooks((current) => [{
+			id: `saved-look-${Date.now()}`,
+			name: `Look ${current.length + 1}`,
+			mood: 'Guardado hoy',
+			signature,
+			items: { ...selectedItems },
+		}, ...current].slice(0, 6));
+	}
+
+	function applySavedLook(look) {
+		setSelectedItems(look.items);
+		setActiveCategory('Camisas');
 	}
 
 	function scrollCloset(direction) {
@@ -270,6 +315,40 @@ export default function Main() {
 							</div>
 						</div>
 						<div className="closet-library-footer"><span>{visibleItems.length} prendas en {activeCategory.toLowerCase()}</span><button type="button" onClick={() => setActiveView('DressMe')}>Volver al simulador <ArrowRight size={15} /></button></div>
+						<section className="saved-looks-panel" aria-labelledby="saved-looks-title-library">
+							<div className="saved-looks-header">
+								<div>
+									<span className="eyebrow">Looks guardados</span>
+									<h2 id="saved-looks-title-library">Tu selección favorita</h2>
+								</div>
+								<span className="saved-looks-count">{savedLooks.length} looks</span>
+							</div>
+							<div className="saved-looks-list">
+								{savedLooks.length === 0 ? (
+									<div className="saved-look-empty">Aún no tienes looks guardados. Guarda el look actual para volverlo a usar más tarde.</div>
+								) : (
+									savedLooks.map((look) => (
+										<article className="saved-look-card" key={look.id}>
+											<div className="saved-look-summary">
+												<div className="saved-look-swatches" aria-label={`Colores de ${look.name}`}>
+													{Object.values(look.items).map((item) => (
+														<span key={`${look.id}-${item.id}`} style={{ backgroundColor: item.color }} title={item.name} />
+													))}
+												</div>
+												<div className="saved-look-copy">
+													<strong>{look.name}</strong>
+													<small>{look.mood}</small>
+												</div>
+											</div>
+											<div className="saved-look-actions">
+												<button className="action-button" type="button" onClick={() => applySavedLook(look)}>Aplicar look</button>
+												<button className="ghost-button" type="button" onClick={() => setSavedLooks((current) => current.filter((savedLook) => savedLook.id !== look.id))}>Quitar</button>
+											</div>
+										</article>
+									))
+								)}
+							</div>
+						</section>
 					</section>
 				) : (
 				<>
@@ -350,7 +429,7 @@ export default function Main() {
 						</div>
 						</div>
 						<div className={activeView === 'Avatar' ? 'look-score' : 'look-score is-hidden'} id="perfil">
-							{activeView === 'Avatar' && <SaveLookButton saved={saved} onClick={() => setSaved(!saved)} />}
+							{activeView === 'Avatar' && <SaveLookButton saved={saved} onClick={toggleSaveCurrentLook} />}
 						</div>
 					</section>
 
@@ -400,7 +479,7 @@ export default function Main() {
 						<div className="closet-heading">
 							<div className="closet-icon"><Shirt size={18} /></div>
 							<div><span className="eyebrow">Clóset digital</span><h2 id="closet-title">Tu ropa</h2></div>
-							{activeView === 'DressMe' && <SaveLookButton saved={saved} onClick={() => setSaved(!saved)} />}
+							{activeView === 'DressMe' && <SaveLookButton saved={saved} onClick={toggleSaveCurrentLook} />}
 						</div>
 						<div className="category-tabs" role="tablist" aria-label="Categorías de prendas">
 							{categories.map((category) => (
@@ -478,6 +557,7 @@ export default function Main() {
 				</>
 				)}
 			</main>
+			<footer className="page-footer" aria-hidden="true" />
 		</div>
 	);
 }

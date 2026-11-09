@@ -223,7 +223,8 @@ button:focus-visible, a:focus-visible { outline: 2px solid #a7c7e5; outline-offs
 .profile-copy small { color: var(--blue); font-size: 10px; }
 .profile-menu > svg { margin-left: 6px; color: var(--muted); }
 
-.workspace { width: min(1206px, calc(100% - 48px)); margin: 20px auto 34px; }
+.workspace { width: min(1206px, calc(100% - 48px)); margin: 20px auto 56px; }
+.page-footer { min-height: 32px; }
 .workspace-grid { display: grid; grid-template-columns: minmax(0, 1.85fr) minmax(330px, 1fr); gap: 12px; align-items: stretch; }
 .simulator-stage-row { min-width: 0; }
 .outfit-slots { position: absolute; z-index: 4; top: 8px; bottom: 8px; left: 8px; width: 96px; padding: 8px; border: 1px solid rgba(255,255,255,.18); background: rgba(24,24,28,.76); backdrop-filter: blur(5px); }
@@ -371,6 +372,22 @@ button:focus-visible, a:focus-visible { outline: 2px solid #a7c7e5; outline-offs
 .closet-library-footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding-top: 15px; color: #92919a; font-size: 10px; }
 .closet-library-footer button { display: inline-flex; align-items: center; gap: 8px; padding: 8px 0; border: 0; background: transparent; color: #d9d8dc; font-size: 10px; cursor: pointer; }
 .closet-library-footer button:hover { color: #a9c8e4; }
+.saved-looks-panel { margin-top: 22px; padding: 18px 18px 14px; border: 1px solid #3a3a40; border-radius: 18px; background: rgba(18, 18, 22, .7); }
+.saved-looks-header { display: flex; align-items: end; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
+.saved-looks-header h2 { margin: 5px 0 0; color: #f6f5f4; font-family: 'Carrois Gothic', sans-serif; font-size: 20px; font-weight: 400; }
+.saved-looks-count { color: #a9c8e4; font-size: 10px; letter-spacing: .12em; text-transform: uppercase; }
+.saved-looks-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+.saved-look-card { display: grid; gap: 12px; padding: 12px; border: 1px solid #3f3f46; background: rgba(25,25,29,.9); box-shadow: inset 0 0 0 1px rgba(255,255,255,.02); }
+.saved-look-summary { display: flex; align-items: center; gap: 10px; }
+.saved-look-swatches { display: flex; flex: 0 0 auto; gap: 5px; }
+.saved-look-swatches span { width: 19px; height: 19px; border-radius: 50%; border: 1px solid rgba(255,255,255,.18); }
+.saved-look-copy { display: grid; gap: 4px; min-width: 0; }
+.saved-look-copy strong { color: #f0eff0; font-size: 12px; }
+.saved-look-copy small { color: #9ca0a8; font-size: 9px; }
+.saved-look-actions { display: flex; gap: 7px; }
+.saved-look-actions .action-button { flex: 1; min-height: 33px; font-size: 9px; }
+.ghost-button { min-height: 33px; padding: 0 10px; border: 1px solid #47474e; background: transparent; color: #d3d3d8; font-size: 9px; cursor: pointer; }
+.saved-look-empty { padding: 18px 14px; border: 1px dashed #4c4b54; background: rgba(255,255,255,.02); color: #d3d4d8; font-size: 11px; line-height: 1.6; }
 .recommendation-copy h2 { font-size: 19px; }
 .recommendation-copy p { margin: 9px 0 0; color: #b4b2bb; font-size: 10px; }
 .season-palette { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 0; }
@@ -414,6 +431,13 @@ button:focus-visible, a:focus-visible { outline: 2px solid #a7c7e5; outline-offs
   .closet-card-visual { height: clamp(160px, 53vw, 220px); }
   .closet-card-garment { width: clamp(125px, 42vw, 170px); height: clamp(125px, 42vw, 170px); }
   .closet-library-footer { padding-top: 12px; }
+  .saved-looks-panel { margin-top: 18px; padding: 14px 12px 12px; }
+  .saved-looks-header { align-items: flex-start; flex-direction: column; gap: 8px; margin-bottom: 12px; }
+  .saved-looks-list { grid-template-columns: 1fr; gap: 12px; }
+  .saved-look-card { padding: 10px; }
+  .saved-look-actions { display: grid; gap: 8px; }
+  .saved-look-actions .action-button,
+  .ghost-button { width: 100%; min-height: 36px; }
   .workspace-grid { grid-template-columns: 1fr; }
   .outfit-slots { top: 6px; bottom: 6px; left: 6px; width: 60px; padding: 4px; }
   .outfit-slot-list { gap: 3px; }
@@ -541,6 +565,16 @@ button:focus-visible, a:focus-visible { outline: 2px solid #a7c7e5; outline-offs
 .dressme-app[data-theme='light'] .metrics-panel,
 .dressme-app[data-theme='light'] .recommendation-panel,
 .dressme-app[data-theme='light'] .closet-library { border-color: #d5d5d2; background: rgba(255,255,253,.94); }
+.dressme-app[data-theme='dark'] .closet-panel { border-color: #35353a; background: rgba(28, 28, 32, .94); }
+.dressme-app[data-theme='dark'] .saved-looks-panel { border-color: #3a3a40; background: rgba(18, 18, 22, .7); }
+.dressme-app[data-theme='light'] .saved-looks-panel { border-color: #d5d5d2; background: rgba(255,255,253,.94); }
+.dressme-app[data-theme='light'] .saved-looks-header h2 { color: #292a2e; }
+.dressme-app[data-theme='light'] .saved-looks-count { color: #55738a; }
+.dressme-app[data-theme='light'] .saved-look-card { border-color: #d5d5d2; background: #f5f5f2; box-shadow: inset 0 0 0 1px rgba(40,40,42,.02); }
+.dressme-app[data-theme='light'] .saved-look-copy strong { color: #303136; }
+.dressme-app[data-theme='light'] .saved-look-copy small { color: #696a70; }
+.dressme-app[data-theme='light'] .ghost-button { border-color: #c9c9c7; color: #4b4c52; }
+.dressme-app[data-theme='light'] .saved-look-empty { border-color: #c9c9c7; background: rgba(40,40,42,.025); color: #55565d; }
 .dressme-app[data-theme='light'] .outfit-slots { border-color: rgba(80,80,84,.2); background: rgba(255,255,253,.78); }
 .dressme-app[data-theme='light'] .outfit-slot { border-color: #d4d4d1; background: rgba(40,40,42,.02); color: #5d5e64; }
 .dressme-app[data-theme='light'] .outfit-slot:hover,
@@ -627,6 +661,7 @@ button { border-radius: 8px; }
 .metrics-panel,
 .recommendation-panel,
 .closet-library { border-radius: 12px; }
+.closet-panel { border-radius: 18px; }
 .avatar-stage,
 .outfit-slots,
 .outfit-slot,
