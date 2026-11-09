@@ -31,3 +31,9 @@ backend/storage/*
 !backend/storage/.gitkeep
 workers/**/.venv/
 frontend/.vite/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyd
