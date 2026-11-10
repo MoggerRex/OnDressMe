@@ -7,12 +7,14 @@ import {
 	Glasses,
 	Info,
 	Maximize2,
+	Menu,
 	Moon,
 	Plus,
 	Shirt,
 	Sparkles,
 	Sun,
 	UserRound,
+	X,
 } from 'lucide-react';
 import { PiBaseballCap, PiCoatHanger, PiPants, PiSneaker } from 'react-icons/pi';
 import MannequinCanvas from '../features/mannequin/MannequinScene.jsx';
@@ -33,6 +35,23 @@ const wardrobe = [
 	{ id: 'black-glasses', name: 'Gafas ónix', category: 'Accesorios', type: 'accessory', color: '#202126', shade: 'Ónix' },
 	{ id: 'white-sneakers', name: 'Tenis hielo', category: 'Calzado', type: 'shoes', color: '#e5e7eb', shade: 'Hielo' },
 	{ id: 'pine-cap', name: 'Gorra pino', category: 'Gorras', type: 'hat', color: '#315b58', shade: 'Pino' },
+];
+
+const defaultSavedLooks = [
+	{
+		id: 'saved-look-1',
+		name: 'Minimal índigo',
+		mood: 'Capas moderadas',
+		signature: 'sweater-blue|sand-pants|silver-watch|white-sneakers|pine-cap',
+		items: { shirt: wardrobe[0], pants: wardrobe[6], accessory: wardrobe[8], shoes: wardrobe[10], hat: wardrobe[11] },
+	},
+	{
+		id: 'saved-look-2',
+		name: 'Noche sobria',
+		mood: 'Urban chic',
+		signature: 'onyx-shirt|charcoal-pants|black-glasses|white-sneakers|pine-cap',
+		items: { shirt: wardrobe[3], pants: wardrobe[7], accessory: wardrobe[9], shoes: wardrobe[10], hat: wardrobe[11] },
+	},
 ];
 
 const palette = [
@@ -79,6 +98,10 @@ function formatMetric(field, value) {
 	return `${value} ${field.unit}`;
 }
 
+function getLookSignature(items) {
+	return Object.values(items).map((item) => item.id).join('|');
+}
+
 function CategoryTab({ category, isActive, onClick }) {
 	const Icon = categoryIcons[category];
 
@@ -97,8 +120,22 @@ function CategoryTab({ category, isActive, onClick }) {
 	);
 }
 
+function SaveLookButton({ saved, onClick }) {
+	return (
+		<button
+			aria-pressed={saved}
+			className={saved ? 'outline-button save-look-button is-saved' : 'outline-button save-look-button'}
+		onClick={onClick}
+		type="button"
+	>
+			<Check size={15} />{saved ? 'Look guardado' : 'Guardar look'}
+		</button>
+	);
+}
+
 export default function Main() {
 	const [activeView, setActiveView] = useState('DressMe');
+	const [menuOpen, setMenuOpen] = useState(false);
 	const [theme, setTheme] = useState(() => {
 		try {
 			return window.localStorage.getItem('ondressme-theme') === 'light' ? 'light' : 'dark';
@@ -116,7 +153,7 @@ export default function Main() {
 		hat: wardrobe[11],
 	});
 	const [undertone, setUndertone] = useState('Neutro');
-	const [saved, setSaved] = useState(false);
+	const [savedLooks, setSavedLooks] = useState(defaultSavedLooks);
 	const [measurementsSaved, setMeasurementsSaved] = useState(false);
 	const [bodyMetrics, setBodyMetrics] = useState({
 		height: 173,
@@ -129,6 +166,8 @@ export default function Main() {
 		hips: 96,
 	});
 
+	const currentLookSignature = getLookSignature(selectedItems);
+	const saved = savedLooks.some((look) => look.signature === currentLookSignature);
 	const visibleItems = wardrobe.filter((item) => item.category === activeCategory);
 	const activeSelectedItem = visibleItems.find((item) => selectedItems[item.type].id === item.id);
 	const ActiveCategoryIcon = categoryIcons[activeCategory];
@@ -144,7 +183,29 @@ export default function Main() {
 
 	function previewItem(item) {
 		setSelectedItems((current) => ({ ...current, [item.type]: item }));
-		setSaved(false);
+	}
+
+	function toggleSaveCurrentLook() {
+		const signature = currentLookSignature;
+		const alreadySaved = savedLooks.some((look) => look.signature === signature);
+
+		if (alreadySaved) {
+			setSavedLooks((current) => current.filter((look) => look.signature !== signature));
+			return;
+		}
+
+		setSavedLooks((current) => [{
+			id: `saved-look-${Date.now()}`,
+			name: `Look ${current.length + 1}`,
+			mood: 'Guardado hoy',
+			signature,
+			items: { ...selectedItems },
+		}, ...current].slice(0, 6));
+	}
+
+	function applySavedLook(look) {
+		setSelectedItems(look.items);
+		setActiveCategory('Camisas');
 	}
 
 	function scrollCloset(direction) {
@@ -164,15 +225,25 @@ export default function Main() {
 	return (
 		<div className="dressme-app" data-theme={theme}>
 			<header className="topbar">
+				<button
+					aria-controls="main-navigation"
+					aria-expanded={menuOpen}
+					aria-label={menuOpen ? 'Cerrar menú' : 'Abrir menú'}
+					className="menu-toggle"
+					onClick={() => setMenuOpen(!menuOpen)}
+					type="button"
+				>
+					{menuOpen ? <X size={20} /> : <Menu size={20} />}
+				</button>
 				<a className="brand" href="#inicio" aria-label="OnDressMe, inicio">
 					<span className="brand-mark">O</span>
 					<span>ONDRESSME</span>
 				</a>
-				<nav className="main-nav" aria-label="Navegación principal">
-					<a className={activeView === 'DressMe' ? 'nav-link is-current' : 'nav-link'} href="#simulador" onClick={() => setActiveView('DressMe')}>DressMe</a>
-					<a className={activeView === 'Avatar' ? 'nav-link is-current' : 'nav-link'} href="#avatar" onClick={() => setActiveView('Avatar')}>Avatar</a>
-					<a className={activeView === 'Closet' ? 'nav-link is-current' : 'nav-link'} href="#closet" onClick={() => setActiveView('Closet')}>Closet</a>
-					<a className="nav-link" href="#perfil">Perfil</a>
+				<nav id="main-navigation" className={menuOpen ? 'main-nav is-open' : 'main-nav'} aria-label="Navegación principal">
+					<a className={activeView === 'DressMe' ? 'nav-link is-current' : 'nav-link'} href="#simulador" onClick={(event) => { event.preventDefault(); setActiveView('DressMe'); setMenuOpen(false); }}>DressMe</a>
+					<a className={activeView === 'Avatar' ? 'nav-link is-current' : 'nav-link'} href="#avatar" onClick={(event) => { event.preventDefault(); setActiveView('Avatar'); setMenuOpen(false); }}>Avatar</a>
+					<a className={activeView === 'Closet' ? 'nav-link is-current' : 'nav-link'} href="#closet" onClick={(event) => { event.preventDefault(); setActiveView('Closet'); setMenuOpen(false); }}>Closet</a>
+					<a className="nav-link" href="#perfil" onClick={(event) => { event.preventDefault(); setMenuOpen(false); }}>Perfil</a>
 				</nav>
 				<div className="header-actions">
 					<button
@@ -235,7 +306,7 @@ export default function Main() {
 											style={{ '--item-index': index, '--garment-color': item.color }}
 											type="button"
 										>
-											<span className="closet-card-hanger"><ItemIcon size={17} strokeWidth={1.5} /></span>
+											<span className="closet-card-hanger"><PiCoatHanger size={22} /></span>
 											<span className="closet-card-visual"><ItemIcon className="closet-card-garment" size={150} strokeWidth={1.1} />{isSelected && <span className="closet-card-check"><Check size={12} /></span>}</span>
 											<span className="closet-card-color" />
 										</button>
@@ -244,6 +315,40 @@ export default function Main() {
 							</div>
 						</div>
 						<div className="closet-library-footer"><span>{visibleItems.length} prendas en {activeCategory.toLowerCase()}</span><button type="button" onClick={() => setActiveView('DressMe')}>Volver al simulador <ArrowRight size={15} /></button></div>
+						<section className="saved-looks-panel" aria-labelledby="saved-looks-title-library">
+							<div className="saved-looks-header">
+								<div>
+									<span className="eyebrow">Looks guardados</span>
+									<h2 id="saved-looks-title-library">Tu selección favorita</h2>
+								</div>
+								<span className="saved-looks-count">{savedLooks.length} looks</span>
+							</div>
+							<div className="saved-looks-list">
+								{savedLooks.length === 0 ? (
+									<div className="saved-look-empty">Aún no tienes looks guardados. Guarda el look actual para volverlo a usar más tarde.</div>
+								) : (
+									savedLooks.map((look) => (
+										<article className="saved-look-card" key={look.id}>
+											<div className="saved-look-summary">
+												<div className="saved-look-swatches" aria-label={`Colores de ${look.name}`}>
+													{Object.values(look.items).map((item) => (
+														<span key={`${look.id}-${item.id}`} style={{ backgroundColor: item.color }} title={item.name} />
+													))}
+												</div>
+												<div className="saved-look-copy">
+													<strong>{look.name}</strong>
+													<small>{look.mood}</small>
+												</div>
+											</div>
+											<div className="saved-look-actions">
+												<button className="action-button" type="button" onClick={() => applySavedLook(look)}>Aplicar look</button>
+												<button className="ghost-button" type="button" onClick={() => setSavedLooks((current) => current.filter((savedLook) => savedLook.id !== look.id))}>Quitar</button>
+											</div>
+										</article>
+									))
+								)}
+							</div>
+						</section>
 					</section>
 				) : (
 				<>
@@ -323,12 +428,8 @@ export default function Main() {
 							<div className="rotate-hint"><span>↔</span> Arrastra para rotar</div>
 						</div>
 						</div>
-						<div className="look-score" id="perfil">
-		
-							<button className={saved ? 'outline-button is-saved' : 'outline-button'} onClick={() => setSaved(!saved)} type="button">
-								{saved ? <Check size={15} /> : <Check size={15} />}
-								{saved ? 'Look guardado' : 'Guardar look'}
-							</button>
+						<div className={activeView === 'Avatar' ? 'look-score' : 'look-score is-hidden'} id="perfil">
+							{activeView === 'Avatar' && <SaveLookButton saved={saved} onClick={toggleSaveCurrentLook} />}
 						</div>
 					</section>
 
@@ -378,6 +479,7 @@ export default function Main() {
 						<div className="closet-heading">
 							<div className="closet-icon"><Shirt size={18} /></div>
 							<div><span className="eyebrow">Clóset digital</span><h2 id="closet-title">Tu ropa</h2></div>
+							{activeView === 'DressMe' && <SaveLookButton saved={saved} onClick={toggleSaveCurrentLook} />}
 						</div>
 						<div className="category-tabs" role="tablist" aria-label="Categorías de prendas">
 							{categories.map((category) => (
@@ -421,7 +523,7 @@ export default function Main() {
 						</div>
 						<div className="closet-actions">
 							<button className="action-button" type="button"><span className="add-garment-icon" aria-hidden="true"><Shirt size={16} /><Plus size={9} /></span> Añadir prenda</button>
-							<button className="action-button" type="button">Ver clóset completo <PiCoatHanger size={15} /></button>
+							<button className="action-button" onClick={() => setActiveView('Closet')} type="button">Ver clóset completo <PiCoatHanger size={15} /></button>
 						</div>
 						<div className="outfit-palette">
 							<div className="palette-title"><span className="eyebrow">Paleta del outfit</span><Sparkles size={14} /></div>
@@ -431,30 +533,31 @@ export default function Main() {
 								))}
 							</div>
 						</div>
+						{activeView === 'DressMe' && (
+							<section className="recommendation-panel closet-palette-panel" aria-labelledby="recommendation-title">
+								<div className="recommendation-copy">
+									<span className="eyebrow">Recomendación</span>
+									<h2 id="recommendation-title">Tu paleta hoy</h2>
+									<p>Combina bases profundas con acentos fríos y luminosos.</p>
+								</div>
+								<div className="season-palette">
+									{palette.map((color) => (
+										<div className="season-color" key={color.name}>
+											<span style={{ backgroundColor: color.color }} />
+											<small>{color.name}</small>
+										</div>
+									))}
+								</div>
+								<button className="guide-button" type="button">Ver guía completa <ArrowRight size={16} /></button>
+							</section>
+						)}
 						</aside>
 					)}
 				</div>
-
-				<section className="recommendation-panel" aria-labelledby="recommendation-title">
-					<div className="recommendation-copy">
-						<span className="eyebrow">Recomendación</span>
-						<h2 id="recommendation-title">Tu paleta hoy</h2>
-						<p>Combina bases profundas con acentos fríos y luminosos.</p>
-					</div>
-					<div className="season-palette">
-						{palette.map((color) => (
-							<div className="season-color" key={color.name}>
-								<span style={{ backgroundColor: color.color }} />
-								<small>{color.name}</small>
-							</div>
-						))}
-					</div>
-					<button className="guide-button" type="button">Ver guía completa <ArrowRight size={16} /></button>
-					<button className="add-look-button" type="button" aria-label="Crear nuevo look"><Plus size={16} /></button>
-				</section>
 				</>
 				)}
 			</main>
+			<footer className="page-footer" aria-hidden="true" />
 		</div>
 	);
 }
