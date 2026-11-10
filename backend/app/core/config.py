@@ -15,6 +15,8 @@ class Settings:
     storage_path: Path = Path(os.getenv("STORAGE_PATH", "./storage"))
     max_upload_mb: int = int(os.getenv("MAX_UPLOAD_MB", "10"))
     internal_worker_token: str = os.getenv("INTERNAL_WORKER_TOKEN", "")
+    avatar_worker_url: str = os.getenv("AVATAR_WORKER_URL", "http://localhost:8101")
+    outfit_worker_url: str = os.getenv("OUTFIT_WORKER_URL", "http://localhost:8102")
     cors_origins: tuple[str, ...] = tuple(
         origin.strip() for origin in os.getenv("CORS_ORIGINS", "http://localhost:5173").split(",") if origin.strip()
     )
