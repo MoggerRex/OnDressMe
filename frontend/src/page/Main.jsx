@@ -65,9 +65,9 @@ const palette = [
 ];
 
 const stageColors = {
-	Cálido: { top: '#57443d', middle: '#3e3837', floor: '#89786f' },
-	Frío: { top: '#3e4b59', middle: '#343a42', floor: '#77818b' },
-	Neutro: { top: '#47484d', middle: '#35363a', floor: '#777a80' },
+	Cálido: { top: '#9b603f', middle: '#7b4b37', floor: '#d2a17a' },
+	Frío: { top: '#4c7598', middle: '#3d617f', floor: '#9cbed4' },
+	Neutro: { top: '#777c83', middle: '#5b6067', floor: '#adb2b8' },
 };
 
 const categoryIcons = {
@@ -169,16 +169,12 @@ export default function Main() {
 	const currentLookSignature = getLookSignature(selectedItems);
 	const saved = savedLooks.some((look) => look.signature === currentLookSignature);
 	const visibleItems = wardrobe.filter((item) => item.category === activeCategory);
-	const activeSelectedItem = visibleItems.find((item) => selectedItems[item.type].id === item.id);
-	const ActiveCategoryIcon = categoryIcons[activeCategory];
-	const bmi = bodyMetrics.weight / ((bodyMetrics.height / 100) ** 2);
-	const bmiCategory = bmi < 18.5 ? 'bajo' : bmi < 25 ? 'normal' : bmi < 30 ? 'alto' : 'obesidad';
 	const outfitSlots = [
+		{ category: 'Gorras', item: selectedItems.hat },
+		{ category: 'Accesorios', item: selectedItems.accessory },
 		{ category: 'Camisas', item: selectedItems.shirt },
 		{ category: 'Pantalones', item: selectedItems.pants },
-		{ category: 'Accesorios', item: selectedItems.accessory },
 		{ category: 'Calzado', item: selectedItems.shoes },
-		{ category: 'Gorras', item: selectedItems.hat },
 	];
 
 	function previewItem(item) {
@@ -442,7 +438,6 @@ export default function Main() {
 							<div className="metric-summary">
 								<div className="metric-card"><small>Altura</small><strong>{bodyMetrics.height}<span> cm</span></strong></div>
 								<div className="metric-card"><small>Peso</small><strong>{bodyMetrics.weight}<span> kg</span></strong></div>
-								<div className="metric-card"><small>IMC</small><strong>{bmi.toFixed(1)}<span> {bmiCategory}</span></strong></div>
 							</div>
 							<div className="measurements-title">
 								<strong>Proporciones generales</strong>
@@ -492,13 +487,6 @@ export default function Main() {
 							))}
 						</div>
 						<h3 className="items-heading">{activeCategory}<span>{visibleItems.length} prendas</span></h3>
-						<div className="active-garment" aria-live="polite">
-							<span className="active-garment-swatch" style={{ '--garment-color': activeSelectedItem.color }}>
-								<ActiveCategoryIcon size={20} strokeWidth={1.6} />
-							</span>
-							<span className="active-garment-copy"><small>En tu avatar</small><strong>{activeSelectedItem.name}</strong></span>
-							<span className="live-preview"><span />Vista 3D</span>
-						</div>
 						<div className="wardrobe-grid">
 							{visibleItems.map((item, index) => {
 								const ItemIcon = categoryIcons[item.category];
@@ -517,6 +505,7 @@ export default function Main() {
 											<ItemIcon size={42} strokeWidth={1.35} />
 											{isSelected && <span className="garment-check"><Check size={12} strokeWidth={2.5} /></span>}
 										</span>
+										<span className="wardrobe-item-name">{item.name}</span>
 									</button>
 								);
 							})}
