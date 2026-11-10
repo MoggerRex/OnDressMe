@@ -613,3 +613,29 @@ Se reemplazó la carga manual e incorrecta del checkpoint por `load_sam_3d_body_
 ## 11. Prompt corto para pasarle a Gemini
 
 > Tengo un backend FastAPI en `backend-sam3d/server.py` que usa SAM 3D Body (`facebook/sam-3d-body-vith`) cargado desde Hugging Face con `load_sam_3d_body_hf`. El modelo corre en un entorno Conda `sam3d` con Python 3.10, PyTorch 2.5.1+cu121, OpenCV, Trimesh, FastAPI y Uvicorn. El endpoint `/generate-3d` recibe una imagen, obtiene `pred_vertices` y `estimator.faces`, estima un color de piel con una máscara HSV + YCrCb sobre la región `[18%–30% de alto, 40%–60% de ancho]` de la foto, toma la mediana de los píxeles de piel y asigna ese mismo RGBA a todos los vértices. Luego exporta `avatar_output.glb` con `trimesh` usando `process=False`, lo que genera el atributo `COLOR_0`, y lo devuelve con `media_type="model/gltf-binary"`. No hay detector de personas ni de rostros: si no hay detector, SAM usa la imagen completa como bbox. No hay textura ni ropa; es un color sólido. El frontend aún no carga el GLB. Necesito que me ayudes a [explicar / mejorar / integrar / depurar] este flujo.
+
+---
+
+## 12. Ajuste de prenda sobre un cuerpo seleccionado
+
+`POST /generate-cloth` ya no usa SAM 3D Objects ni un servicio remoto. Recibe obligatoriamente los dos archivos multipart:
+
+- `garment_image`: imagen PNG o JPG de la prenda.
+- `body_glb`: GLB del cuerpo que se seleccionó previamente.
+
+El servidor carga el GLB como malla y detecta la silueta de la prenda: utiliza el canal alfa si la imagen tiene transparencia, o GrabCut si el fondo es opaco. Con la proporción y el espacio central libre de esa silueta clasifica la imagen como camiseta o pantalón. Luego selecciona la banda corporal correspondiente del modelo SAM 3D, cierra pequeñas discontinuidades de la máscara y conserva las caras en el contorno con un margen de rasterización de 2 px para evitar bordes dentados. Desplaza los vértices `0.018 m` a lo largo de las normales para dejar más holgura entre la prenda y el cuerpo. La proyección respeta la orientación vertical del GLB SAM 3D, donde las coordenadas crecen desde la cabeza hacia los pies. El GLB exporta normales de vértice para que Blender aplique sombreado suave. Finalmente exporta `prenda_fit.glb` y lo devuelve como `model/gltf-binary`. Si falta alguno de los archivos, FastAPI responde con `422`; por tanto, no se puede generar la prenda sin aportar el cuerpo seleccionado.
+
+La selección aproximada de altura usa el 15%-53% de la malla para camisetas y el 45%-97% para pantalones. La clasificación es geométrica y está pensada para fotos de una sola prenda, de frente, sin una persona vistiéndola. No reemplaza un modelo especializado de segmentación/clasificación.
+
+Las respuestas de `/generate-3d` se generan en un archivo temporal único, que se elimina después de enviarse. Esto evita que `curl -o avatar_output.glb` sobrescriba el archivo del cuerpo mientras FastAPI aún lo está transmitiendo.
+
+Ejemplo de llamada:
+
+```powershell
+curl.exe -X POST "http://127.0.0.1:8000/generate-cloth" `
+  -F "garment_image=@C:\ruta\a\prenda.png" `
+  -F "body_glb=@C:\ruta\a\avatar.glb" `
+  -o prenda_fit.glb
+```
+
+La proyección usa colores por vértice, no una textura UV ni simulación de tela. La imagen se proyecta en forma planar sobre la superficie extraída, por lo que funciona mejor con una imagen de prenda frontal y fondo transparente o contrastante. El frontend actual sigue siendo un prototipo y todavía no ofrece selección/carga de esos archivos ni consume este endpoint.

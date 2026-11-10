@@ -12,7 +12,6 @@ from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from PIL import Image
-from gradio_client import Client, handle_file
 from starlette.background import BackgroundTask
 from starlette.concurrency import run_in_threadpool
 
@@ -24,10 +23,6 @@ from sam_3d_body import SAM3DBodyEstimator, load_sam_3d_body_hf
 
 app = FastAPI(title="OnDressMe 3D Generation Server")
 logger = logging.getLogger(__name__)
-OBJECTS_SPACE_ID = os.getenv(
-    "SAM3D_OBJECTS_SPACE",
-    "stabilityai/stable-fast-3d",
-)
 
 app.add_middleware(
     CORSMiddleware,
@@ -84,228 +79,247 @@ def estimate_skin_color(image: np.ndarray) -> np.ndarray:
     return np.median(skin_pixels, axis=0).astype(np.uint8)
 
 
-def discover_objects_endpoints(api_info: dict) -> tuple[str, str]:
-    if not isinstance(api_info, dict):
-        raise RuntimeError("El Space no publicó un esquema de API válido.")
+def extract_garment_mask(garment_pixels: np.ndarray) -> np.ndarray:
+    if garment_pixels.ndim != 3 or garment_pixels.shape[2] != 4:
+        raise ValueError("La imagen de la prenda debe contener píxeles RGBA.")
 
-    named_endpoints = api_info.get("named_endpoints", {})
-    if not isinstance(named_endpoints, dict):
-        raise RuntimeError("El Space no publicó endpoints nombrados.")
+    alpha = garment_pixels[:, :, 3]
+    if np.any(alpha < 255):
+        garment_mask = alpha > 16
+    else:
+        image_height, image_width = alpha.shape
+        if image_height < 5 or image_width < 5:
+            raise ValueError("La imagen de la prenda es demasiado pequeña.")
 
-    generation_candidates = []
-    preprocessing_candidates = []
-
-    for endpoint_name, endpoint_info in named_endpoints.items():
-        parameters = endpoint_info.get("parameters", [])
-        parameter_names = {
-            parameter.get("parameter_name", "").lower()
-            for parameter in parameters
-        }
-        output_labels = {
-            output.get("label", "").lower()
-            for output in endpoint_info.get("returns", [])
-        }
-
-        if (
-            "3d model" in output_labels
-            and "input_image" in parameter_names
-            and "texture_size" in parameter_names
-        ):
-            generation_candidates.append(endpoint_name)
-
-        if (
-            "preview background removal" in output_labels
-            and "image" in parameter_names
-            and ("fr" in parameter_names or "foreground_ratio" in parameter_names)
-        ):
-            preprocessing_candidates.append(endpoint_name)
-
-    if len(generation_candidates) != 1 or len(preprocessing_candidates) != 1:
-        raise RuntimeError(
-            "No se pudo identificar de forma inequívoca la API de generación "
-            "y eliminación de fondo del Space."
+        grabcut_mask = np.zeros((image_height, image_width), dtype=np.uint8)
+        background_model = np.zeros((1, 65), dtype=np.float64)
+        foreground_model = np.zeros((1, 65), dtype=np.float64)
+        rectangle = (
+            int(image_width * 0.05),
+            int(image_height * 0.05),
+            int(image_width * 0.90),
+            int(image_height * 0.90),
         )
-
-    return preprocessing_candidates[0], generation_candidates[0]
-
-
-def build_endpoint_arguments(
-    endpoint_info: dict,
-    image_parameter: str,
-    image_file: object,
-    overrides: dict[str, object],
-) -> dict[str, object]:
-    arguments = {}
-    for parameter in endpoint_info.get("parameters", []):
-        name = parameter.get("parameter_name")
-        if name == image_parameter:
-            arguments[name] = image_file
-        elif name in overrides:
-            arguments[name] = overrides[name]
-        elif parameter.get("parameter_has_default"):
-            arguments[name] = parameter.get("parameter_default")
-        else:
-            raise RuntimeError(
-                f"El endpoint remoto requiere un parámetro desconocido: {name}."
+        try:
+            cv2.grabCut(
+                cv2.cvtColor(garment_pixels[:, :, :3], cv2.COLOR_RGB2BGR),
+                grabcut_mask,
+                rectangle,
+                background_model,
+                foreground_model,
+                8,
+                cv2.GC_INIT_WITH_RECT,
             )
-    return arguments
+        except cv2.error as error:
+            raise ValueError(
+                "No se pudo separar la prenda del fondo; usa una imagen con "
+                "fondo transparente o con más contraste."
+            ) from error
 
+        garment_mask = np.isin(
+            grabcut_mask,
+            (cv2.GC_FGD, cv2.GC_PR_FGD),
+        )
 
-def build_full_endpoint_arguments(
-    client: Client,
-    endpoint_name: str,
-    overrides: dict[str, object],
-) -> list[object]:
-    endpoint = next(
-        endpoint
-        for endpoint in client.endpoints.values()
-        if endpoint.api_name == endpoint_name
+    component_count, labels, component_stats, _ = cv2.connectedComponentsWithStats(
+        garment_mask.astype(np.uint8),
+        connectivity=8,
     )
-    components = {
-        component["id"]: component
-        for component in client.config.get("components", [])
-    }
-    parameters = client.view_api(print_info=False, return_format="dict")[
-        "named_endpoints"
-    ][endpoint_name]["parameters"]
-    parameter_index = 0
-    arguments = []
+    if component_count <= 1:
+        raise ValueError("No se detectó una prenda en la imagen.")
 
-    for component_id, component_type in zip(
-        endpoint.dependency["inputs"],
-        endpoint.input_component_types,
+    largest_component = 1 + int(np.argmax(component_stats[1:, cv2.CC_STAT_AREA]))
+    garment_mask = labels == largest_component
+    garment_mask = cv2.morphologyEx(
+        garment_mask.astype(np.uint8),
+        cv2.MORPH_CLOSE,
+        cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5)),
+    ).astype(bool)
+    foreground_ratio = float(np.mean(garment_mask))
+    if foreground_ratio < 0.02 or foreground_ratio > 0.90:
+        raise ValueError(
+            "No se pudo identificar la silueta de la prenda. "
+            "Prueba con fondo transparente o con más contraste."
+        )
+
+    return garment_mask
+
+
+def build_garment_shell(
+    body_bytes: bytes,
+    garment_pixels: np.ndarray,
+    garment_mask: np.ndarray,
+) -> tuple[trimesh.Trimesh, str]:
+    if not body_bytes.startswith(b"glTF"):
+        raise ValueError("El cuerpo seleccionado no es un archivo GLB válido.")
+
+    try:
+        body_mesh = trimesh.load(
+            io.BytesIO(body_bytes),
+            file_type="glb",
+            force="mesh",
+        )
+    except Exception as error:
+        raise ValueError(
+            "No se pudo cargar la malla GLB del cuerpo seleccionado."
+        ) from error
+
+    if not isinstance(body_mesh, trimesh.Trimesh):
+        raise ValueError("El archivo del cuerpo no contiene una malla 3D válida.")
+
+    vertices = np.asarray(body_mesh.vertices, dtype=np.float64)
+    faces = np.asarray(body_mesh.faces, dtype=np.int64)
+    if (
+        vertices.ndim != 2
+        or vertices.shape[1] != 3
+        or len(vertices) == 0
+        or faces.ndim != 2
+        or faces.shape[1] != 3
+        or len(faces) == 0
+        or not np.isfinite(vertices).all()
     ):
-        component = components[component_id]
-        props = component.get("props", {})
+        raise ValueError("La malla del cuerpo no contiene vértices y caras válidos.")
 
-        if component_type.is_state:
-            arguments.append(None)
-        elif component_type.skip:
-            if component.get("type") != "button":
-                raise RuntimeError(
-                    f"El Space tiene un componente omitido no compatible: "
-                    f"{component.get('type')}."
-                )
-            arguments.append(overrides["run_btn"])
-        else:
-            parameter = parameters[parameter_index]
-            parameter_index += 1
-            name = parameter.get("parameter_name")
-            if name in overrides:
-                arguments.append(overrides[name])
-            elif parameter.get("parameter_has_default"):
-                arguments.append(parameter.get("parameter_default"))
-            else:
-                raise RuntimeError(
-                    f"El endpoint remoto requiere un parámetro desconocido: {name}."
-                )
+    # La dimensión más larga identifica la altura en un cuerpo de pie.
+    vertical_axis = int(np.argmax(np.ptp(vertices, axis=0)))
+    body_height = np.ptp(vertices[:, vertical_axis])
+    if body_height <= 0:
+        raise ValueError("No se pudo determinar la altura del cuerpo.")
 
-    if parameter_index != len(parameters):
-        raise RuntimeError("No se pudieron asociar los parámetros de la API remota.")
-    return arguments
+    mask_y, mask_x = np.nonzero(garment_mask)
+    if len(mask_x) == 0:
+        raise ValueError("No se detectó una prenda en la imagen.")
+    mask_left, mask_right = mask_x.min(), mask_x.max()
+    mask_top, mask_bottom = mask_y.min(), mask_y.max()
+    mask_width = mask_right - mask_left + 1
+    mask_height = mask_bottom - mask_top + 1
 
-
-def find_glb_path(value: object) -> str | None:
-    if isinstance(value, (str, os.PathLike)):
-        path = os.fspath(value)
-        if path.lower().endswith(".glb") and os.path.isfile(path):
-            return path
-    elif isinstance(value, dict):
-        path = value.get("path")
-        if isinstance(path, str) and path.lower().endswith(".glb") and os.path.isfile(path):
-            return path
-        for item in value.values():
-            result = find_glb_path(item)
-            if result:
-                return result
-    elif isinstance(value, (list, tuple)):
-        for item in value:
-            result = find_glb_path(item)
-            if result:
-                return result
-    return None
-
-
-def generate_cloth_with_space(image_path: str) -> str:
-    token = os.getenv("HF_TOKEN")
-    client = Client(
-        OBJECTS_SPACE_ID,
-        token=token,
-        verbose=False,
-        _skip_components=False,
+    center_strip_start = int(mask_left + mask_width * 0.46)
+    center_strip_end = max(
+        center_strip_start + 1,
+        int(mask_left + mask_width * 0.54),
     )
-    api_info = client.view_api(print_info=False, return_format="dict")
-    preprocessing_endpoint, generation_endpoint = discover_objects_endpoints(api_info)
-    named_endpoints = api_info["named_endpoints"]
-
-    image_file = handle_file(image_path)
-    preprocessing_info = named_endpoints[preprocessing_endpoint]
-    preprocessing_arguments = build_endpoint_arguments(
-        preprocessing_info,
-        image_parameter="image",
-        image_file=image_file,
-        overrides={"fr": 0.85, "foreground_ratio": 0.85},
+    lower_region_start = int(mask_top + mask_height * 0.45)
+    lower_center_strip = garment_mask[
+        lower_region_start:mask_bottom + 1,
+        center_strip_start:center_strip_end,
+    ]
+    center_gap_ratio = float(
+        np.mean(~np.any(lower_center_strip, axis=1))
     )
-    preprocessing_result = client.predict(
-        api_name=preprocessing_endpoint,
-        **preprocessing_arguments,
+    aspect_ratio = mask_width / mask_height
+    garment_type = (
+        "pants"
+        if aspect_ratio < 0.82 or center_gap_ratio > 0.25
+        else "shirt"
+    )
+    height_range = (
+        (0.45, 0.97) if garment_type == "pants" else (0.15, 0.53)
     )
 
-    button_state = (
-        preprocessing_result[0].get("value")
-        if isinstance(preprocessing_result, (list, tuple))
-        and preprocessing_result
-        and isinstance(preprocessing_result[0], dict)
-        else None
+    height_min = vertices[:, vertical_axis].min()
+    band_min = height_min + body_height * height_range[0]
+    band_max = height_min + body_height * height_range[1]
+    body_band_vertex_mask = (
+        (vertices[:, vertical_axis] >= band_min)
+        & (vertices[:, vertical_axis] <= band_max)
     )
-    if button_state not in {"Run", "Remove Background"}:
-        raise RuntimeError(
-            "El Space no devolvió un estado de botón reconocido tras procesar la imagen."
+    body_band_faces = faces[np.all(body_band_vertex_mask[faces], axis=1)]
+    if len(body_band_faces) == 0:
+        raise ValueError(
+            f"No se encontraron caras del cuerpo en la zona de {garment_type}."
         )
 
-    generation_overrides = {
-        "run_btn": button_state,
-        "input_image": image_file,
-        "foreground_ratio": 0.85,
-        "remesh_option": "None",
-        "vertex_count": -1,
-        "texture_size": 1024,
-    }
-    generation_arguments = build_full_endpoint_arguments(
-        client,
-        generation_endpoint,
-        generation_overrides,
+    band_vertex_indices = np.unique(body_band_faces)
+    remaining_axes = [axis for axis in range(3) if axis != vertical_axis]
+    lateral_axis = max(
+        remaining_axes,
+        key=lambda axis: np.ptp(vertices[band_vertex_indices, axis]),
     )
-    result = client.predict(
-        *generation_arguments,
-        api_name=generation_endpoint,
+    lateral_min = vertices[band_vertex_indices, lateral_axis].min()
+    lateral_range = np.ptp(vertices[band_vertex_indices, lateral_axis])
+    band_height_min = vertices[band_vertex_indices, vertical_axis].min()
+    band_height_range = np.ptp(vertices[band_vertex_indices, vertical_axis])
+    if lateral_range <= 0 or band_height_range <= 0:
+        raise ValueError("No se pudo proyectar la imagen sobre el cuerpo.")
+
+    image_height, image_width = garment_pixels.shape[:2]
+    if (
+        image_height == 0
+        or image_width == 0
+        or garment_mask.shape != (image_height, image_width)
+    ):
+        raise ValueError("La máscara de la prenda no coincide con su imagen.")
+
+    def project_to_image(projected_vertices: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        u = (
+            projected_vertices[:, lateral_axis] - lateral_min
+        ) / lateral_range
+        v = (
+            projected_vertices[:, vertical_axis] - band_height_min
+        ) / band_height_range
+        pixel_x = np.rint(mask_left + u * (mask_width - 1)).astype(np.intp)
+        pixel_y = np.rint(mask_top + v * (mask_height - 1)).astype(np.intp)
+        return (
+            np.clip(pixel_x, 0, image_width - 1),
+            np.clip(pixel_y, 0, image_height - 1),
+        )
+
+    selection_mask = cv2.dilate(
+        garment_mask.astype(np.uint8),
+        cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5)),
+    ).astype(bool)
+    face_vertices = vertices[body_band_faces]
+    face_vertex_pixel_x, face_vertex_pixel_y = project_to_image(
+        face_vertices.reshape(-1, 3)
     )
-
-    if button_state == "Remove Background":
-        generation_overrides["run_btn"] = "Run"
-        generation_arguments = build_full_endpoint_arguments(
-            client,
-            generation_endpoint,
-            generation_overrides,
+    face_vertex_inside = garment_mask[
+        face_vertex_pixel_y,
+        face_vertex_pixel_x,
+    ].reshape(-1, 3)
+    face_centers = vertices[body_band_faces].mean(axis=1)
+    face_pixel_x, face_pixel_y = project_to_image(face_centers)
+    silhouette_face_mask = (
+        selection_mask[face_pixel_y, face_pixel_x]
+        & np.any(face_vertex_inside, axis=1)
+    )
+    garment_faces = body_band_faces[silhouette_face_mask]
+    if len(garment_faces) == 0:
+        raise ValueError(
+            f"La silueta detectada no se superpone con el cuerpo para {garment_type}."
         )
-        result = client.predict(
-            *generation_arguments,
-            api_name=generation_endpoint,
-        )
 
-    glb_path = find_glb_path(result)
-    if glb_path is None:
-        raise RuntimeError("El Space no devolvió un archivo .glb descargable.")
+    garment_vertex_indices = np.unique(garment_faces)
+    normals = np.asarray(body_mesh.vertex_normals, dtype=np.float64)[
+        garment_vertex_indices
+    ]
+    normal_lengths = np.linalg.norm(normals, axis=1)
+    if not np.isfinite(normals).all() or np.any(normal_lengths <= 1e-8):
+        raise ValueError("La malla del cuerpo tiene normales inválidas en la prenda.")
 
-    with open(glb_path, "rb") as glb_file:
-        if glb_file.read(4) != b"glTF":
-            raise RuntimeError("El archivo recibido no tiene un encabezado GLB válido.")
+    inflated_vertices = vertices[garment_vertex_indices] + (
+        normals / normal_lengths[:, np.newaxis]
+    ) * 0.018
+    vertex_remap = np.full(len(vertices), -1, dtype=np.int64)
+    vertex_remap[garment_vertex_indices] = np.arange(len(garment_vertex_indices))
+    local_faces = vertex_remap[garment_faces]
 
-    return glb_path
+    pixel_x, pixel_y = project_to_image(vertices[garment_vertex_indices])
+    vertex_colors = garment_pixels[pixel_y, pixel_x]
+
+    garment_mesh = trimesh.Trimesh(
+        vertices=inflated_vertices,
+        faces=local_faces,
+        process=False,
+    )
+    garment_mesh.visual.vertex_colors = vertex_colors
+    garment_mesh.vertex_normals
+    return garment_mesh, garment_type
 
 
 @app.post("/generate-3d")
 async def generate_3d(image: UploadFile = File(...)):
+    output_dir = None
     try:
         img_bytes = await image.read()
         img = Image.open(io.BytesIO(img_bytes)).convert("RGB")
@@ -331,53 +345,77 @@ async def generate_3d(image: UploadFile = File(...)):
         mesh = trimesh.Trimesh(vertices=vertices, faces=faces, process=False)
         mesh.visual.vertex_colors = vertex_colors
 
-        output_path = os.path.join(os.path.dirname(__file__), "avatar_output.glb")
-        mesh.export(output_path)
+        output_dir = tempfile.mkdtemp(prefix="sam3d-body-")
+        output_path = os.path.join(output_dir, "avatar_output.glb")
+        mesh.export(output_path, include_normals=True)
 
-        return FileResponse(output_path, media_type="model/gltf-binary", filename="avatar.glb")
+        return FileResponse(
+            output_path,
+            media_type="model/gltf-binary",
+            filename="avatar_output.glb",
+            background=BackgroundTask(shutil.rmtree, output_dir),
+        )
     except HTTPException:
+        if output_dir and os.path.exists(output_dir):
+            shutil.rmtree(output_dir)
         raise
     except Exception as e:
+        if output_dir and os.path.exists(output_dir):
+            shutil.rmtree(output_dir)
         logger.exception("Error procesando la imagen.")
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.post("/generate-cloth")
-async def generate_cloth(image: UploadFile = File(...)):
-    output_path = None
+async def generate_cloth(
+    garment_image: UploadFile = File(...),
+    body_glb: UploadFile = File(...),
+):
+    output_dir = None
     try:
-        image_bytes = await image.read()
+        image_bytes = await garment_image.read()
         try:
-            img = Image.open(io.BytesIO(image_bytes)).convert("RGBA")
+            garment = Image.open(io.BytesIO(image_bytes)).convert("RGBA")
         except (OSError, ValueError) as e:
-            raise HTTPException(status_code=422, detail="El archivo no es una imagen válida.") from e
+            raise HTTPException(
+                status_code=422,
+                detail="El archivo no es una imagen válida.",
+            ) from e
 
-        with tempfile.TemporaryDirectory(prefix="sam3d-cloth-") as temp_dir:
-            input_path = os.path.join(temp_dir, "input.png")
-            img.save(input_path, format="PNG")
+        body_bytes = await body_glb.read()
+        garment_pixels = np.asarray(garment, dtype=np.uint8)
+        garment_mask = await run_in_threadpool(
+            extract_garment_mask,
+            garment_pixels,
+        )
+        garment_mesh, garment_type = await run_in_threadpool(
+            build_garment_shell,
+            body_bytes,
+            garment_pixels,
+            garment_mask,
+        )
+        logger.info("Prenda detectada como %s.", garment_type)
 
-            remote_glb_path = await run_in_threadpool(
-                generate_cloth_with_space,
-                input_path,
-            )
-
-            output_fd, output_path = tempfile.mkstemp(prefix="prenda-", suffix=".glb")
-            os.close(output_fd)
-            shutil.copyfile(remote_glb_path, output_path)
-
+        output_dir = tempfile.mkdtemp(prefix="sam3d-cloth-")
+        output_path = os.path.join(output_dir, "prenda_fit.glb")
+        garment_mesh.export(output_path, include_normals=True)
         return FileResponse(
             output_path,
             media_type="model/gltf-binary",
-            filename="prenda.glb",
-            background=BackgroundTask(os.remove, output_path),
+            filename="prenda_fit.glb",
+            background=BackgroundTask(shutil.rmtree, output_dir),
         )
     except HTTPException:
         raise
+    except ValueError as e:
+        if output_dir and os.path.exists(output_dir):
+            shutil.rmtree(output_dir)
+        raise HTTPException(status_code=422, detail=str(e)) from e
     except Exception as e:
-        if output_path and os.path.exists(output_path):
-            os.remove(output_path)
-        logger.exception("Error generando el modelo de la prenda con el Space remoto.")
+        if output_dir and os.path.exists(output_dir):
+            shutil.rmtree(output_dir)
+        logger.exception("Error generando la prenda sobre el cuerpo seleccionado.")
         raise HTTPException(
-            status_code=502,
-            detail=f"No se pudo generar la prenda con el Space remoto: {e}",
+            status_code=500,
+            detail=f"No se pudo generar la prenda ajustada al cuerpo: {e}",
         ) from e
