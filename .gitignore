@@ -22,3 +22,12 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Repositorios clonados de Meta y cachés en backend
+backend-sam3d/sam-3d-body/
+backend-sam3d/sam-3d-objects/
+backend-sam3d/__pycache__/
+
+# Archivos 3D exportados de prueba
+*.obj
+*.glb
