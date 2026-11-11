@@ -31,3 +31,4 @@ backend-sam3d/__pycache__/
 # Archivos 3D exportados de prueba
 *.obj
 *.glb
+!backend-sam3d/templates/*.glb
