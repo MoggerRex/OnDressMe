@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
 	ArrowRight,
 	Check,
@@ -144,6 +144,25 @@ export default function Main() {
 		}
 	});
 	const [activeCategory, setActiveCategory] = useState('Camisas');
+	const [profileForm, setProfileForm] = useState(() => {
+		try {
+			const stored = JSON.parse(window.localStorage.getItem('ondressme-profile') || '{}');
+			return {
+				name: stored.name || 'Eva García',
+				style: stored.style || 'Invierno profundo',
+				photoName: stored.photoName || 'Sin foto aún',
+			};
+		} catch {
+			return { name: 'Eva García', style: 'Invierno profundo', photoName: 'Sin foto aún' };
+		}
+	});
+	const [profileModalOpen, setProfileModalOpen] = useState(() => {
+		try {
+			return !window.localStorage.getItem('ondressme-profile-created');
+		} catch {
+			return true;
+		}
+	});
 	const closetTrackRef = useRef(null);
 	const [selectedItems, setSelectedItems] = useState({
 		shirt: wardrobe[0],
@@ -218,6 +237,30 @@ export default function Main() {
 		}
 	}
 
+	function handleProfileChange(field, value) {
+		setProfileForm((current) => ({ ...current, [field]: value }));
+	}
+
+	function saveProfile() {
+		try {
+			window.localStorage.setItem('ondressme-profile', JSON.stringify(profileForm));
+			window.localStorage.setItem('ondressme-profile-created', 'true');
+		} catch {
+			return;
+		}
+		setProfileModalOpen(false);
+	}
+
+	useEffect(() => {
+		if (!profileModalOpen) {
+			try {
+				window.localStorage.setItem('ondressme-profile', JSON.stringify(profileForm));
+			} catch {
+				return;
+			}
+		}
+	}, [profileForm, profileModalOpen]);
+
 	return (
 		<div className="dressme-app" data-theme={theme}>
 			<header className="topbar">
@@ -239,7 +282,7 @@ export default function Main() {
 					<a className={activeView === 'DressMe' ? 'nav-link is-current' : 'nav-link'} href="#simulador" onClick={(event) => { event.preventDefault(); setActiveView('DressMe'); setMenuOpen(false); }}>DressMe</a>
 					<a className={activeView === 'Avatar' ? 'nav-link is-current' : 'nav-link'} href="#avatar" onClick={(event) => { event.preventDefault(); setActiveView('Avatar'); setMenuOpen(false); }}>Avatar</a>
 					<a className={activeView === 'Closet' ? 'nav-link is-current' : 'nav-link'} href="#closet" onClick={(event) => { event.preventDefault(); setActiveView('Closet'); setMenuOpen(false); }}>Closet</a>
-					<a className="nav-link" href="#perfil" onClick={(event) => { event.preventDefault(); setMenuOpen(false); }}>Perfil</a>
+					<a className={activeView === 'Profile' ? 'nav-link is-current' : 'nav-link'} href="#perfil" onClick={(event) => { event.preventDefault(); setActiveView('Profile'); setMenuOpen(false); }}>Perfil</a>
 				</nav>
 				<div className="header-actions">
 					<button
@@ -252,7 +295,7 @@ export default function Main() {
 					>
 						{theme === 'dark' ? <Sun size={18} /> : <Moon size={18} />}
 					</button>
-					<button className="profile-menu" type="button">
+					<button className="profile-menu" type="button" onClick={() => setActiveView('Profile')}>
 						<span className="profile-initials">EG</span>
 						<span className="profile-copy"><strong>Eva García</strong><small>Invierno profundo</small></span>
 						<ArrowRight size={15} aria-hidden="true" />
@@ -261,12 +304,110 @@ export default function Main() {
 			</header>
 
 			<main className="workspace" id="inicio">
-				{activeView === 'Closet' ? (
+				{profileModalOpen && (
+					<div className="profile-modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="profile-modal-title">
+						<div className="profile-modal-card">
+							<div className="profile-modal-header">
+								<div className="profile-modal-icon"><UserRound size={18} /></div>
+								<div>
+									<span className="eyebrow">Bienvenida</span>
+									<h2 id="profile-modal-title">Crea tu perfil</h2>
+								</div>
+							</div>
+							<label className="profile-field">
+								<span>Nombre</span>
+								<input
+									placeholder="Tu nombre"
+									type="text"
+									value={profileForm.name}
+									onChange={(event) => handleProfileChange('name', event.target.value)}
+								/>
+							</label>
+							<label className="profile-field">
+								<span>Estilo</span>
+								<input
+									placeholder="Ej. Invierno profundo"
+									type="text"
+									value={profileForm.style}
+									onChange={(event) => handleProfileChange('style', event.target.value)}
+								/>
+							</label>
+							<div className="profile-upload-box">
+								<div className="profile-upload-copy">
+									<strong>Foto de tu rostro</strong>
+									<p>Sube una imagen para preparar la colorimetría y la recomendación de paleta.</p>
+								</div>
+								<label className="profile-upload-trigger">
+									<input
+										type="file"
+										accept="image/*"
+										onChange={(event) => {
+											const file = event.target.files?.[0];
+											if (file) handleProfileChange('photoName', file.name);
+										}}
+									/>
+									<span>Subir foto</span>
+								</label>
+							</div>
+							<div className="profile-upload-note">Archivo actual: {profileForm.photoName}</div>
+							<div className="profile-modal-actions">
+								<button className="ghost-button" type="button" onClick={() => setProfileModalOpen(false)}>Más tarde</button>
+								<button className="action-button" type="button" onClick={saveProfile}>Guardar perfil</button>
+							</div>
+						</div>
+					</div>
+				)}
+				{activeView === 'Profile' ? (
+					<section className="profile-page" aria-labelledby="profile-page-title">
+						<div className="profile-page-header">
+							<div>
+								<span className="eyebrow">Perfil</span>
+								<h1 id="profile-page-title">Tu perfil personal</h1>
+							</div>
+							<button className="outline-button" type="button" onClick={() => setProfileModalOpen(true)}>Editar perfil</button>
+						</div>
+						<div className="profile-page-grid">
+							<div className="profile-summary-card">
+								<div className="profile-avatar">
+									<span>{profileForm.name.charAt(0).toUpperCase() || 'E'}</span>
+								</div>
+								<div className="profile-summary-copy">
+									<strong>{profileForm.name}</strong>
+									<small>{profileForm.style}</small>
+								</div>
+							</div>
+							<div className="profile-guide-card">
+								<span className="eyebrow">Colorimetría</span>
+								<h2>Cómo preparar la foto</h2>
+								<ol>
+									<li>Tu rostro tiene que estar descubierto, sin sombreros, gafas ni accesorios que tapen la cara.</li>
+									<li>La foto debe tener iluminacion lo más natural posible, idealmente con luz de día suave.</li>
+									<li>Haz la foto en una pared neutra y mirando al frente, con la cara completamente visible.</li>
+									<li>Sin filtros, sin maquillaje intenso ni sombras bruscas para una lectura más precisa.</li>
+								</ol>
+								<label className="profile-upload-box compact">
+									<div className="profile-upload-copy">
+										<strong>Subir foto del rostro</strong>
+										<p>{profileForm.photoName}</p>
+									</div>
+									<input
+										type="file"
+										accept="image/*"
+										onChange={(event) => {
+											const file = event.target.files?.[0];
+											if (file) handleProfileChange('photoName', file.name);
+										}}
+									/>
+								</label>
+							</div>
+						</div>
+					</section>
+				) : activeView === 'Closet' ? (
 					<section className="closet-library" id="closet" aria-labelledby="closet-library-title">
 						<div className="closet-library-heading">
-							<span className="eyebrow">Clóset digital</span>
+					
 							<div className="closet-library-title-row">
-								<h1 id="closet-library-title">Todo tu estilo, en un solo lugar.</h1>
+								<h1 id="closet-library-title">Tu clóset</h1>
 								<button className="outline-button add-closet-item" type="button"><span className="add-garment-icon" aria-hidden="true"><Shirt size={16} /><Plus size={9} /></span> Añadir prenda</button>
 							</div>
 						</div>
@@ -386,7 +527,6 @@ export default function Main() {
 												>
 													<span className="outfit-slot-visual" style={{ '--garment-color': item.color }}>
 														<SlotIcon size={34} strokeWidth={1.5} />
-														<span className="outfit-slot-check"><Check size={10} strokeWidth={2.5} /></span>
 													</span>
 												</button>
 											);
