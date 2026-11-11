@@ -328,6 +328,58 @@ def build_garment_shell(
     )
     body_extents = np.ptp(body_bounds, axis=0)
     remaining_axes = [axis for axis in range(3) if axis != vertical_axis]
+    lateral_axis = max(remaining_axes, key=lambda axis: body_extents[axis])
+    if body_extents[lateral_axis] <= 0 or body_extents[vertical_axis] <= 0:
+        raise ValueError("No se pudo proyectar la silueta de la prenda sobre el cuerpo.")
+
+    silhouette_padding = max(3, int(round(min(mask_width, mask_height) * 0.01)))
+    selection_mask = cv2.dilate(
+        garment_mask.astype(np.uint8),
+        cv2.getStructuringElement(
+            cv2.MORPH_ELLIPSE,
+            (silhouette_padding * 2 + 1, silhouette_padding * 2 + 1),
+        ),
+    ).astype(bool)
+
+    def project_body_to_garment_image(
+        projected_vertices: np.ndarray,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        u = (
+            projected_vertices[:, lateral_axis] - body_bounds[0, lateral_axis]
+        ) / body_extents[lateral_axis]
+        v = (
+            projected_vertices[:, vertical_axis] - body_bounds[0, vertical_axis]
+        ) / body_extents[vertical_axis]
+        pixel_x = np.rint(mask_left + u * (mask_width - 1)).astype(np.intp)
+        pixel_y = np.rint(mask_bottom - v * (mask_height - 1)).astype(np.intp)
+        return (
+            np.clip(pixel_x, 0, image_width - 1),
+            np.clip(pixel_y, 0, image_height - 1),
+        )
+
+    face_centers = vertices[body_band_faces].mean(axis=1)
+    face_center_x, face_center_y = project_body_to_garment_image(face_centers)
+    projected_face_vertices = vertices[body_band_faces].reshape(-1, 3)
+    face_vertex_x, face_vertex_y = project_body_to_garment_image(
+        projected_face_vertices
+    )
+    face_vertex_inside = selection_mask[face_vertex_y, face_vertex_x].reshape(-1, 3)
+    silhouette_face_mask = (
+        selection_mask[face_center_y, face_center_x]
+        & (np.sum(face_vertex_inside, axis=1) >= 1)
+    )
+    body_band_faces = body_band_faces[silhouette_face_mask]
+    if len(body_band_faces) == 0:
+        raise ValueError(
+            f"La silueta de la prenda no se superpone con el cuerpo para {garment_type}."
+        )
+
+    band_vertex_indices = np.unique(body_band_faces)
+    body_region_vertices = vertices[band_vertex_indices]
+    body_bounds = np.vstack(
+        (body_region_vertices.min(axis=0), body_region_vertices.max(axis=0))
+    )
+    body_extents = np.ptp(body_bounds, axis=0)
     clearance_distance = 0.03 * float(np.mean(body_extents[remaining_axes]))
     if clearance_distance <= 0:
         raise ValueError("No se pudo calcular la holgura de la prenda.")
@@ -345,7 +397,6 @@ def build_garment_shell(
     vertex_remap = np.full(len(vertices), -1, dtype=np.int64)
     vertex_remap[band_vertex_indices] = np.arange(len(band_vertex_indices))
     garment_faces = vertex_remap[body_band_faces]
-    lateral_axis = max(remaining_axes, key=lambda axis: body_extents[axis])
     image_u = (
         body_region_vertices[:, lateral_axis] - body_bounds[0, lateral_axis]
     ) / body_extents[lateral_axis]
