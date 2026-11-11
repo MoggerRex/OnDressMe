@@ -1,0 +1,127 @@
+
+# backtrace
+Exception Record:
+
+ExceptionCode         : EXCEPTION_ACCESS_VIOLATION (0xc0000005)
+Exception Address     : 0x00007FF65973CF5E
+Exception Module      : blender.exe
+Exception Flags       : 0x00000000
+Exception Parameters  : 0x2
+	Parameters[0] (action)  : 0x0000000000000001 (write)
+	Parameters[1] (address) : 0x0000000000000010
+
+
+Stack trace:
+blender.exe         :0x00007FF65973CF5E  Symbols not available
+
+
+Loaded Modules :
+0x00007FF658C30000 5.3.0.0              blender.exe
+0x00007FF9CE770000 10.0.26100.9974      ntdll.dll  
+0x00007FF974570000 26.10.11201.0        aswhook.dll  
+0x00007FF9CD840000 10.0.26100.9974      KERNEL32.DLL  
+0x00007FF9CBC10000 10.0.26100.9974      KERNELBASE.dll  
+0x00007FF9CD010000 10.0.26100.9974      SHELL32.dll  
+0x00007FF97F920000                      blender_cpu_check.dll  
+0x00007FF977ED0000 2022.3.0.0           tbbmalloc.dll  
+0x00007FF9CBAA0000 10.0.26100.9711      msvcp_win.dll  
+0x00007FF9CB910000 10.0.26100.9711      ucrtbase.dll  
+0x00007FF9CE090000 10.0.26100.9818      USER32.dll  
+0x00007FFFA1020000 14.44.35211.0        MSVCP140.dll  
+0x00007FF9CBA70000 10.0.26100.9974      win32u.dll  
+0x00007FF92B470000 14.44.35211.0        VCRUNTIME140.dll  
+0x00007FF9CD7D0000 10.0.26100.8328      GDI32.dll  
+0x00007FF9CC240000 10.0.26100.9974      gdi32full.dll  
+0x00007FF977EC0000 14.44.35211.0        VCRUNTIME140_1.dll  
+0x00007FF9CDEF0000 10.0.26100.9974      ole32.dll  
+0x00007FF978CB0000 2022.3.0.0           tbbmalloc_proxy.dll  
+0x00007FFFA0FC0000 2022.3.0.0           tbb12.dll  
+0x00007FFFA10B0000                      gmp-10.dll  
+0x00007FF9CC5A0000 10.0.26100.9818      combase.dll  
+0x00007FFFA0C40000 13.0.0.0             openvdb.dll  
+0x00007FF9CE3E0000 10.0.26100.9974      RPCRT4.dll  
+0x00007FF9CDDD0000 10.0.26100.9818      SHLWAPI.dll  
+0x00007FF9C8F90000 10.0.26100.9818      dbghelp.dll  
+0x00007FF9CCF20000 10.0.26100.9974      OLEAUT32.dll  
+0x00007FF9CCCE0000 10.0.26100.9974      ADVAPI32.dll  
+0x00007FF9CDE40000 7.0.26100.9711       msvcrt.dll  
+0x00007FF9CE500000 10.0.26100.9818      sechost.dll  
+0x00007FF99DA20000 6.10.26100.9818      COMCTL32.dll  
+0x00007FF9C59A0000 10.0.26100.9818      dxgi.dll  
+0x00007FF9B94D0000 10.0.26100.1150      VERSION.dll  
+0x00007FF9CE5B0000 10.0.26100.9818      shcore.dll  
+0x00007FFF9FFF0000                      epoxy-0.dll  
+0x00007FF9CD800000 10.0.26100.9818      IMM32.dll  
+0x00007FFFA00A0000 60.26.100.0          avutil-60.dll  
+0x00007FFF9D2C0000 62.28.100.0          avcodec-62.dll  
+0x00007FFF9FD70000 62.12.100.0          avformat-62.dll  
+0x00007FF9CC0B0000 10.0.26100.9818      CRYPT32.dll  
+0x00007FF929A10000 62.3.100.0           avdevice-62.dll  
+0x00007FFF9CB60000 3.13.13150.1013      python313.dll  
+0x00007FF9CE290000 10.0.26100.9818      WS2_32.dll  
+0x00007FFF9C670000                      OpenColorIO_2_5.dll  
+0x00007FFF9C570000 1.39.4.0             MaterialXCore.dll  
+0x00007FF800000000 1.39.4.0             MaterialXFormat.dll  
+0x00007FFF99000000                      usd_ms.dll  
+0x00007FFF98B50000                      shaderc_shared.dll  
+0x00007FFF98A00000 9.5.100.0            swscale-9.dll  
+0x00007FFF987D0000                      OpenEXR.dll  
+0x00007FFF988B0000 3.1.16.0             OpenImageIO_Util.dll  
+0x00007FFFA0AF0000                      Iex.dll  
+0x00007FFF98770000                      Imath.dll  
+0x00007FFF96D90000 4.4.1.0              embree4.dll  
+0x00007FFFA0C10000 2.5.0.0              OpenImageDenoise.dll  
+0x00007FFF96BF0000 1.23.1.0             OpenAL32.dll  
+0x00007FF9C5B10000 10.0.26100.9818      dwmapi.dll  
+0x00007FFF963C0000 3.1.16.0             OpenImageIO.dll  
+0x00007FF9A2CE0000 10.0.26100.9974      MPR.dll  
+0x00007FFF93550000                      oslexec.dll  
+0x00007FFF91CD0000                      oslcomp.dll  
+0x00007FFF91CA0000                      oslquery.dll  
+0x00007FFF91600000                      ceres.dll  
+0x00007FFF91AD0000 1.2.2.0              sndfile.dll  
+0x00007FF9CB580000 10.0.26100.9818      CFGMGR32.dll  
+0x00007FFF914D0000                      hiprt0200564.dll  
+0x00007FFF8EC90000                      cycles_kernel_oneapi_aot.dll  
+0x00007FFF8E940000 9.0.0.0              sycl9.dll  
+0x00007FFF8E8F0000 14.44.35211.0        MSVCP140_2.dll  
+0x00007FF9CA430000 10.0.26100.3912      powrprof.dll  
+0x00007FFF8E830000                      opentimelineio.dll  
+0x00007FF9CB7F0000 10.0.26100.9974      bcrypt.dll  
+0x00007FF9CB1D0000 10.0.26100.9974      ncrypt.dll  
+0x00007FF9C5070000 10.0.26100.7705      Secur32.dll  
+0x00007FFF8E3E0000 6.3.100.0            swresample-6.dll  
+0x00007FFF8E410000 11.14.100.0          avfilter-11.dll  
+0x00007FFF8DA10000                      aom.dll  
+0x00007FF900500000 10.0.26100.1150      AVICAP32.dll  
+0x00007FFF8D930000                      OpenEXRCore.dll  
+0x00007FF977DD0000                      IlmThread.dll  
+0x00007FF98FC60000 10.0.26100.9818      OPENGL32.dll  
+0x00007FFF8D7D0000 1.39.4.0             MaterialXRender.dll  
+0x00007FFF8D870000 1.4.341.0            vulkan-1.dll  
+0x00007FFF8D760000 1.39.4.0             MaterialXGenGlsl.dll  
+0x00007FFF8D670000 1.39.4.0             MaterialXGenShader.dll  
+0x00007FFF8A9A0000 2.5.0.0              OpenImageDenoise_core.dll  
+0x00007FF976470000                      oslnoise.dll  
+0x00007FF9B6820000 10.0.26100.9818      WINMM.dll  
+0x00007FFF8A930000                      openjph.0.25.dll  
+0x00007FF8FF8D0000 14.44.35211.0        MSVCP140_ATOMIC_WAIT.dll  
+0x00007FF974600000 9.9.0.0              ur_win_proxy_loader.dll  
+0x00007FFF8A8F0000 10.0.26100.1150      MSVFW32.dll  
+0x00007FF991300000 10.0.26100.9818      GLU32.dll  
+0x00007FF9C87B0000 10.0.26100.9818      dxcore.dll  
+0x00007FF9CA990000 10.0.26100.9818      SSPICLI.DLL  
+0x00007FF9CA410000 10.0.26100.9818      UMPDC.dll  
+0x00007FF9CB180000 10.0.26100.1882      NTASN1.dll  
+0x00007FFF8A7E0000 0.12.0.0             ur_loader.dll  
+0x00007FFF8A710000 1.20.6.0             ze_loader.dll  
+0x00007FF9CA6D0000 10.0.26100.9818      kernel.appcore.dll  
+0x00007FF9C93A0000 10.0.26100.9974      windows.storage.dll  
+0x00007FF9CB820000 10.0.26100.9818      profapi.dll  
+0x00007FF9CAFA0000 10.0.26100.9711      CRYPTBASE.DLL  
+0x00007FF9CC370000 10.0.26100.9974      bcryptPrimitives.dll  
+0x00007FF9CE320000 2001.12.10941.16384  clbcatq.dll  
+0x00007FF9C13D0000 10.0.26100.9974      MMDevApi.dll  
+0x00007FF9CB540000 10.0.26100.9818      DEVOBJ.dll  
+
+# Python backtrace

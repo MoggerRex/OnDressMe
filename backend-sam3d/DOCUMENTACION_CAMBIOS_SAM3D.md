@@ -485,7 +485,7 @@ Origen de cada import:
 ```powershell
 cd "C:\Users\polo0\Documents\Leo Olivares\Softtek\OnDressMe\backend-sam3d"
 conda activate sam3d
-uvicorn server:app --port 8000 --reload
+uvicorn server:app --port 8000
 ```
 
 Esperar mensajes como:
@@ -625,9 +625,9 @@ Se reemplazó la carga manual e incorrecta del checkpoint por `load_sam_3d_body_
 
 `POST /generate-3d` invierte los ejes Y/Z de la salida de SAM 3D Body para que el avatar aparezca de pie en Blender y apoya los pies en el plano Y=0, centrando el modelo horizontalmente. Es necesario volver a generar los avatares creados antes de este cambio.
 
-`POST /generate-cloth` recibe la imagen de la prenda y el cuerpo GLB. Utiliza alfa o GrabCut para segmentar la imagen y clasificarla como camiseta o pantalón. La plantilla `camisa.glb` o `jeans.glb` guía la categoría y, para camisas, la altura aproximada de cobertura; la geometría final se extrae de las caras del cuerpo SAM 3D en esa banda, en vez de escalar la malla rígida de la plantilla. La silueta 2D detectada recorta también qué caras del cuerpo forman la prenda, para no convertir los brazos/manos que quedan fuera de las mangas en parte de la camisa. Los vértices seleccionados se desplazan hacia afuera por sus normales con una holgura equivalente al 3% del ancho/profundidad promedio de la zona. La textura frontal se proyecta en UV normalizados, y el fondo de la imagen se rellena con el color de tela más cercano para evitar agujeros en la superficie. La prenda queda en el mismo sistema de coordenadas del avatar y el GLB usa el centro de la región recortada como pivote. Las plantillas alternativas `base_camisa.glb`/`base_shirt.glb` y `base_jeans.glb`/`base_pants.glb` también se reconocen. Finalmente exporta `prenda_fit.glb` y lo devuelve como `model/gltf-binary`. Si falta alguno de los archivos multipart, FastAPI responde con `422`; si falta una plantilla, el servidor informa el error como `500`.
+`POST /generate-cloth` utiliza el canal alfa o GrabCut para segmentar y clasificar camiseta/pantalón. Para la camiseta carga `templates/base_shirt.glb` con Trimesh (`force="mesh"`), elimina componentes de superficie duplicados con orientación opuesta, conserva las UV restantes y asigna la foto recortada como textura RGBA con transparencia. Escala y traslada la caja completa de la plantilla para que coincida con la caja del torso del avatar: la banda vertical es `50–85%` de su altura y los límites lateral/profundidad son los percentiles `5–95%` de sus vértices en esa banda. Para pantalones conserva la plantilla local `jeans.glb` (o sus nombres alternativos). La geometría viene de las plantillas, no se reconstruye en 3D a partir de la foto. No se crea una malla del torso/hombros del avatar como capa de cobertura. El endpoint exporta `prenda_fit.glb` como `model/gltf-binary`. Si falta un archivo multipart, FastAPI responde con `422`; los errores de plantilla se registran y se devuelven como error del servidor.
 
-La región de ropa se define por bandas verticales normalizadas desde el piso: para camisetas, la altura de la plantilla define una banda centrada aproximadamente al 34% desde la parte superior del cuerpo; para pantalones se usa la banda inferior. La máscara de la foto se proyecta sobre el cuerpo desde la vista frontal y filtra las caras cuyos centros quedan dentro de la silueta (con un pequeño margen de borde). La clasificación es geométrica y está pensada para fotos de una sola prenda, de frente, sin una persona vistiéndola. La prenda es una capa de la superficie del cuerpo, no una simulación de tela ni un patrón 3D con costuras; la textura frontal también se proyecta alrededor de la superficie. La holgura reduce colisiones, pero no las garantiza en poses con brazos pegados al torso.
+El pantalón se ajusta a la banda vertical `3–55%` de la altura corporal; sus límites lateral/profundidad también se calculan con percentiles `5–95%`. La clasificación es heurística y está pensada para una sola prenda aislada. El ajuste a una caja no garantiza que la plantilla respete cada medida anatómica ni que no intersecte el cuerpo. No se generan paneles/patrones ni se reconstruye la espalda a partir de una sola foto.
 
 Las respuestas de `/generate-3d` se generan en un archivo temporal único, que se elimina después de enviarse. Esto evita que `curl -o avatar_output.glb` sobrescriba el archivo del cuerpo mientras FastAPI aún lo está transmitiendo.
 
@@ -640,4 +640,17 @@ curl.exe -X POST "http://127.0.0.1:8000/generate-cloth" `
   -o prenda_fit.glb
 ```
 
-El frontend actual sigue siendo un prototipo y todavía no ofrece selección/carga de esos archivos ni consume este endpoint.
+El frontend permite generar un avatar o seleccionar un GLB, requiere ese cuerpo antes de enviar la prenda, consume ambos endpoints, muestra los dos modelos en el mismo visor Three.js y permite descargar sus GLB. También permite solicitar la simulación y muestra el error explícito cuando Blender no está instalado.
+
+## 13. Simulación local con Blender
+
+`POST /simulate-cloth` recibe `body_glb` y `garment_glb`. El servicio `services/blender_service.py` invoca el ejecutable oficial como proceso separado, serializa solicitudes para evitar varias instancias simultáneas, aplica un timeout y valida el GLB exportado. Antes de añadir Cloth, `simulation/scripts/simulate_garment.py` reduce el cuerpo de colisión a un máximo de 16.000 caras y cada malla de prenda a 6.000 caras. Cloth se aplica a las mallas de la prenda, que ya no incluyen una capa derivada del cuerpo. Luego avanza 24 frames y exporta la prenda.
+
+El servicio busca Blender en `PATH` y también detecta automáticamente la instalación de Steam de este equipo. Para especificar otra instalación, configura la variable antes de iniciar FastAPI:
+
+```powershell
+$env:BLENDER_EXECUTABLE = 'C:\Program Files (x86)\Steam\steamapps\common\Blender\blender.exe'
+$env:BLENDER_TIMEOUT_SECONDS = '300'
+```
+
+Si no se encuentra Blender, el endpoint devuelve `503`; si excede el timeout, devuelve `504`. Los valores físicos incluidos son parámetros iniciales del prototipo y no propiedades textiles calibradas. Las validaciones anteriores de simulación correspondían a una plantilla y geometría distintas; se requiere volver a probar Cloth con la plantilla `base_shirt.glb` ajustada por este flujo.
