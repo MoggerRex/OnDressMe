@@ -11,12 +11,7 @@ function AvatarModel({ url }) {
   return <primitive object={scene} />;
 }
 
-function GarmentModel({ url }) {
-  const { scene } = useGLTF(url);
-  return <primitive object={scene} />;
-}
-
-export default function MannequinScene({ avatarUrl, garmentUrl }) {
+export default function MannequinScene({ avatarUrl }) {
   return (
     <div className="relative h-[520px] w-full overflow-hidden rounded-2xl border border-slate-800 bg-gradient-to-b from-slate-900 to-slate-950">
       <Canvas camera={{ position: [0, 1.15, 3.2], fov: 42 }}>
@@ -24,7 +19,6 @@ export default function MannequinScene({ avatarUrl, garmentUrl }) {
         <directionalLight position={[3, 5, 4]} intensity={1.8} />
         <directionalLight position={[-3, 2, -4]} intensity={0.7} />
         {avatarUrl && <AvatarModel url={avatarUrl} />}
-        {garmentUrl && <GarmentModel url={garmentUrl} />}
         <ContactShadows
           position={[0, 0, 0]}
           opacity={0.45}
@@ -43,7 +37,7 @@ export default function MannequinScene({ avatarUrl, garmentUrl }) {
       {!avatarUrl && (
         <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
           <p className="rounded-xl border border-slate-700 bg-slate-950/80 px-5 py-3 text-center text-sm text-slate-300">
-            Genera o selecciona un avatar GLB para comenzar.
+            Selecciona una foto corporal y genera tu maniquí para comenzar.
           </p>
         </div>
       )}

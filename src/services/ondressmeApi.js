@@ -42,17 +42,3 @@ export async function generateAvatar(imageFile) {
   formData.append('image', imageFile);
   return requestGlb('/generate-3d', formData);
 }
-
-export async function generateGarment(garmentFile, bodyFile) {
-  const formData = new FormData();
-  formData.append('garment_image', garmentFile);
-  formData.append('body_glb', bodyFile);
-  return requestGlb('/generate-cloth', formData);
-}
-
-export async function simulateGarment(garmentFile, bodyFile) {
-  const formData = new FormData();
-  formData.append('body_glb', bodyFile);
-  formData.append('garment_glb', garmentFile);
-  return requestGlb('/simulate-cloth', formData);
-}
