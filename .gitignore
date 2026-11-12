@@ -26,6 +26,8 @@ dist-ssr
 # Repositorios clonados de Meta y cachés en backend
 backend-sam3d/sam-3d-body/
 backend-sam3d/__pycache__/
+backend-sam3d/services/__pycache__/
+backend-sam3d/tests/__pycache__/
 
 # Archivos 3D exportados de prueba
 *.obj

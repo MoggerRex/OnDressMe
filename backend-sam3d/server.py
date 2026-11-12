@@ -1,17 +1,22 @@
 import io
+import json
 import logging
 import os
 import shutil
 import sys
 import tempfile
+import threading
+import uuid
+from collections import OrderedDict
 import torch
 import trimesh
 import numpy as np
 import cv2
-from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from PIL import Image
+from starlette.concurrency import run_in_threadpool
 from starlette.background import BackgroundTask
 
 # Agregar el repositorio clonado al PATH de Python
@@ -19,6 +24,15 @@ repo_path = os.path.join(os.path.dirname(__file__), "sam-3d-body")
 sys.path.append(repo_path)
 
 from sam_3d_body import SAM3DBodyEstimator, load_sam_3d_body_hf
+from services.blender_simulator import (
+    GarmentSimulationError,
+    simulate_static_garment,
+)
+from services.garment_pipeline import (
+    GarmentPipelineError,
+    MAX_GARMENT_MESH_BYTES,
+    load_garment_mesh,
+)
 
 app = FastAPI(title="OnDressMe 3D Generation Server")
 logger = logging.getLogger(__name__)
@@ -28,7 +42,27 @@ app.add_middleware(
     allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["X-Avatar-Id", "X-Pipeline-Info"],
 )
+
+_MAX_CACHED_AVATARS = 3
+_avatar_cache: OrderedDict[str, trimesh.Trimesh] = OrderedDict()
+_avatar_cache_lock = threading.Lock()
+
+
+def _remember_avatar(vertices: np.ndarray, faces: np.ndarray) -> str:
+    avatar_id = uuid.uuid4().hex
+    body_mesh = trimesh.Trimesh(
+        vertices=vertices.copy(),
+        faces=faces.copy(),
+        process=False,
+    )
+    with _avatar_cache_lock:
+        _avatar_cache[avatar_id] = body_mesh
+        while len(_avatar_cache) > _MAX_CACHED_AVATARS:
+            _avatar_cache.popitem(last=False)
+    return avatar_id
+
 
 if not torch.cuda.is_available():
     raise RuntimeError("SAM 3D Body requiere una GPU CUDA disponible.")
@@ -126,6 +160,7 @@ async def generate_3d(image: UploadFile = File(...)):
 
         mesh = trimesh.Trimesh(vertices=vertices, faces=faces, process=False)
         mesh.visual.vertex_colors = vertex_colors
+        avatar_id = _remember_avatar(vertices, faces)
 
         output_dir = tempfile.mkdtemp(prefix="sam3d-body-")
         output_path = os.path.join(output_dir, "avatar_output.glb")
@@ -135,6 +170,7 @@ async def generate_3d(image: UploadFile = File(...)):
             output_path,
             media_type="model/gltf-binary",
             filename="avatar_output.glb",
+            headers={"X-Avatar-Id": avatar_id},
             background=BackgroundTask(shutil.rmtree, output_dir),
         )
     except HTTPException:
@@ -146,3 +182,107 @@ async def generate_3d(image: UploadFile = File(...)):
             shutil.rmtree(output_dir)
         logger.exception("Error procesando la imagen.")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/generate-garment")
+async def generate_garment(
+    garment_mesh: UploadFile | None = File(default=None),
+    avatar_id: str = Form(...),
+    garment_type: str = Form(default="tshirt"),
+    image: UploadFile | None = File(default=None),
+):
+    output_dir = None
+    try:
+        if image is not None:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "Una foto no proporciona la geometría necesaria para simular tela. "
+                    "Sube una malla GLB/OBJ ya reconstruida; Garment3DGen requiere "
+                    "una malla base y una malla objetivo, normalmente generada con InstantMesh."
+                ),
+            )
+        if garment_mesh is None:
+            raise HTTPException(
+                status_code=422,
+                detail="Falta la malla 3D de la prenda (archivo GLB u OBJ).",
+            )
+
+        garment_type = garment_type.strip().lower()
+        if garment_type != "tshirt":
+            raise HTTPException(
+                status_code=422,
+                detail="La primera versión solo admite camisetas de manga corta.",
+            )
+
+        with _avatar_cache_lock:
+            body_mesh = _avatar_cache.get(avatar_id)
+            if body_mesh is not None:
+                body_mesh = body_mesh.copy()
+        if body_mesh is None:
+            raise HTTPException(
+                status_code=404,
+                detail=(
+                    "No se encontró ese cuerpo SAM 3D. Genera el maniquí de nuevo "
+                    "si reiniciaste el backend o creaste otro cuerpo."
+                ),
+            )
+
+        mesh_bytes = await garment_mesh.read(MAX_GARMENT_MESH_BYTES + 1)
+        build = load_garment_mesh(
+            mesh_bytes,
+            garment_mesh.filename or "",
+            body_mesh,
+        )
+        simulated_glb, _, penetration_pairs = await run_in_threadpool(
+            simulate_static_garment,
+            body_mesh,
+            build.scene,
+            garment_type,
+        )
+
+        build.metrics["simulation"] = "blender_completed"
+        build.metrics["penetration_check"] = "triangle_surface_intersections"
+        build.metrics["penetration_triangle_pairs"] = penetration_pairs
+        warnings = build.warnings
+        if penetration_pairs:
+            warnings += (
+                "La comprobación BVH encontró "
+                f"{penetration_pairs} pares de triángulos intersectados; revisa el resultado.",
+            )
+        pipeline_info = json.dumps(
+            {"metrics": build.metrics, "warnings": warnings},
+            ensure_ascii=True,
+            separators=(",", ":"),
+        )
+
+        output_dir = tempfile.mkdtemp(prefix="ondressme-garment-")
+        output_path = os.path.join(output_dir, "garment_fitted.glb")
+        with open(output_path, "wb") as output_file:
+            output_file.write(simulated_glb)
+
+        return FileResponse(
+            output_path,
+            media_type="model/gltf-binary",
+            filename="garment_fitted.glb",
+            headers={"X-Pipeline-Info": pipeline_info},
+            background=BackgroundTask(shutil.rmtree, output_dir),
+        )
+    except HTTPException:
+        if output_dir and os.path.exists(output_dir):
+            shutil.rmtree(output_dir)
+        raise
+    except GarmentPipelineError as error:
+        if output_dir and os.path.exists(output_dir):
+            shutil.rmtree(output_dir)
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    except GarmentSimulationError as error:
+        if output_dir and os.path.exists(output_dir):
+            shutil.rmtree(output_dir)
+        logger.exception("No se pudo completar la simulación de la prenda.")
+        raise HTTPException(status_code=503, detail=str(error)) from error
+    except Exception as error:
+        if output_dir and os.path.exists(output_dir):
+            shutil.rmtree(output_dir)
+        logger.exception("Error procesando la prenda.")
+        raise HTTPException(status_code=500, detail=str(error)) from error

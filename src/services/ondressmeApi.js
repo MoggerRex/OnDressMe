@@ -34,11 +34,31 @@ async function requestGlb(endpoint, formData) {
   if (magic !== 'glTF') {
     throw new Error('La respuesta no contiene un GLB válido.');
   }
-  return blob;
+  return { blob, response };
 }
 
 export async function generateAvatar(imageFile) {
   const formData = new FormData();
   formData.append('image', imageFile);
-  return requestGlb('/generate-3d', formData);
+  const { blob, response } = await requestGlb('/generate-3d', formData);
+  return {
+    blob,
+    avatarId: response.headers.get('x-avatar-id'),
+  };
+}
+
+export async function generateGarment(meshFile, avatarId) {
+  if (!avatarId) {
+    throw new Error('Genera de nuevo el maniquí para vincular la camiseta.');
+  }
+
+  const formData = new FormData();
+  formData.append('garment_mesh', meshFile);
+  formData.append('avatar_id', avatarId);
+  formData.append('garment_type', 'tshirt');
+  const { blob, response } = await requestGlb('/generate-garment', formData);
+  return {
+    blob,
+    pipelineInfo: response.headers.get('x-pipeline-info'),
+  };
 }
