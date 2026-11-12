@@ -3,7 +3,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 
-JobKind = Literal["avatar", "outfit"]
+JobKind = Literal["avatar", "outfit", "garment_3d"]
 JobStatus = Literal["queued", "running", "completed", "failed"]
 
 
