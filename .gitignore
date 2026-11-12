@@ -29,5 +29,17 @@ dist-ssr
 !.env.example
 backend/storage/*
 !backend/storage/.gitkeep
-workers/**/.venv/
+workers/**/.venv*/
 frontend/.vite/
+
+# Python local environments and generated cache
+__pycache__/
+*.py[cod]
+**/.cache/
+
+# Generated outfit models and datasets
+*.joblib
+/workers/outfits/dataset_fashion_mnist/
+
+# Dataset local de outfits
+/workers/outfits/demo_outfits/dataset_ropa/
