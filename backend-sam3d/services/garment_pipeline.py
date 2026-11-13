@@ -10,6 +10,7 @@ import trimesh
 
 MAX_GARMENT_MESH_BYTES = 64 * 1024 * 1024
 MAX_GARMENT_VERTICES = 500_000
+SUPPORTED_GARMENT_TYPES = {"tshirt", "pants"}
 
 
 class GarmentPipelineError(ValueError):
@@ -21,6 +22,94 @@ class GarmentBuildResult:
     scene: trimesh.Scene
     metrics: dict[str, int | float | str]
     warnings: tuple[str, ...]
+
+
+def _smooth_section_values(values: np.ndarray) -> np.ndarray:
+    smoothing_weights = np.array([1.0, 2.0, 3.0, 2.0, 1.0]) / 9.0
+    return np.convolve(
+        np.pad(values, (2, 2), mode="edge"),
+        smoothing_weights,
+        mode="valid",
+    )
+
+
+def _body_section_centers(
+    vertices: np.ndarray,
+    fractions: np.ndarray,
+    body_min_y: float,
+    body_height: float,
+    center_x: float | None = None,
+    central_radius: float | None = None,
+) -> tuple[np.ndarray, np.ndarray]:
+    normalized_y = (vertices[:, 1] - body_min_y) / body_height
+    centerline_x = []
+    centerline_z = []
+    for fraction in fractions:
+        band = np.abs(normalized_y - fraction) <= 0.04
+        samples = vertices[band]
+        if center_x is not None and central_radius is not None:
+            central = samples[np.abs(samples[:, 0] - center_x) <= central_radius]
+            if len(central) >= 8:
+                samples = central
+        if len(samples) < 8:
+            raise GarmentPipelineError(
+                "La resolución de la malla no permite seguir el eje corporal."
+            )
+        x_low, x_high = np.quantile(samples[:, 0], [0.1, 0.9])
+        z_low, z_high = np.quantile(samples[:, 2], [0.1, 0.9])
+        centerline_x.append(float((x_low + x_high) * 0.5))
+        centerline_z.append(float((z_low + z_high) * 0.5))
+
+    centerline_x = np.asarray(centerline_x, dtype=np.float64)
+    centerline_z = np.asarray(centerline_z, dtype=np.float64)
+    if not np.isfinite(centerline_x).all() or not np.isfinite(centerline_z).all():
+        raise GarmentPipelineError(
+            "No se pudo determinar el eje corporal en la malla SAM 3D."
+        )
+    centerline_x = _smooth_section_values(centerline_x)
+    centerline_z = _smooth_section_values(centerline_z)
+    return centerline_x, centerline_z
+
+
+def _bilateral_section_centers(
+    vertices: np.ndarray,
+    normalized_y: np.ndarray,
+    fractions: np.ndarray,
+    center_x: float,
+) -> np.ndarray | None:
+    sample_fractions = fractions[(fractions >= 0.08) & (fractions <= 0.48)]
+    centers = np.empty((len(fractions), 2, 2), dtype=np.float64)
+
+    side_masks = (vertices[:, 0] < center_x, vertices[:, 0] >= center_x)
+    for side_index, side_mask in enumerate(side_masks):
+        valid_fractions = []
+        side_centers = []
+        for fraction in sample_fractions:
+            band = np.abs(normalized_y - fraction) <= 0.04
+            samples = vertices[band & side_mask]
+            if len(samples) < 8:
+                continue
+            x_low, x_high = np.quantile(samples[:, 0], [0.1, 0.9])
+            z_low, z_high = np.quantile(samples[:, 2], [0.1, 0.9])
+            valid_fractions.append(float(fraction))
+            side_centers.append(
+                [float((x_low + x_high) * 0.5), float((z_low + z_high) * 0.5)]
+            )
+
+        if len(valid_fractions) < 2:
+            return None
+
+        side_centers_array = np.asarray(side_centers, dtype=np.float64)
+        smoothed_x = _smooth_section_values(side_centers_array[:, 0])
+        smoothed_z = _smooth_section_values(side_centers_array[:, 1])
+        centers[:, side_index, 0] = np.interp(
+            fractions, valid_fractions, smoothed_x
+        )
+        centers[:, side_index, 1] = np.interp(
+            fractions, valid_fractions, smoothed_z
+        )
+
+    return centers
 
 
 def _validate_body_mesh(body_mesh: trimesh.Trimesh) -> np.ndarray:
@@ -99,42 +188,16 @@ def _body_torso_profile(
             "No se pudieron medir secciones fiables del torso SAM 3D."
         )
 
-    target_width = max(section_widths) * 1.12
+    target_width = max(section_widths) * 1.20
     target_height = body_height * 0.35
     centerline_fractions = np.linspace(0.50, 0.85, 18)
-    centerline_x = []
-    centerline_z = []
-    band_half_width = 0.04
-    for fraction in centerline_fractions:
-        band = np.abs(normalized_y - fraction) <= band_half_width
-        samples = vertices[band]
-        if len(samples) < 8:
-            raise GarmentPipelineError(
-                "La resolución de la malla no permite seguir el eje del torso."
-            )
-        centerline_x.append(
-            float(np.mean(np.quantile(samples[:, 0], [0.1, 0.9])))
-        )
-        centerline_z.append(
-            float(np.mean(np.quantile(samples[:, 2], [0.1, 0.9])))
-        )
-
-    centerline_x = np.asarray(centerline_x, dtype=np.float64)
-    centerline_z = np.asarray(centerline_z, dtype=np.float64)
-    if not np.isfinite(centerline_x).all() or not np.isfinite(centerline_z).all():
-        raise GarmentPipelineError(
-            "No se pudo determinar el eje del torso en la malla SAM 3D."
-        )
-    smoothing_weights = np.array([1.0, 2.0, 3.0, 2.0, 1.0]) / 9.0
-    centerline_x = np.convolve(
-        np.pad(centerline_x, (2, 2), mode="edge"),
-        smoothing_weights,
-        mode="valid",
-    )
-    centerline_z = np.convolve(
-        np.pad(centerline_z, (2, 2), mode="edge"),
-        smoothing_weights,
-        mode="valid",
+    centerline_x, centerline_z = _body_section_centers(
+        vertices,
+        centerline_fractions,
+        float(bounds[0, 1]),
+        body_height,
+        center_x,
+        max(body_width * 0.20, body_height * 0.14),
     )
 
     target_center_fraction = 0.675
@@ -146,7 +209,7 @@ def _body_torso_profile(
         np.interp(target_center_fraction, centerline_fractions, centerline_z)
     )
     target_depth = (
-        float(np.median(section_depths)) + body_height * 0.03
+        float(np.median(section_depths)) + body_height * 0.05
         if section_depths
         else 0.0
     )
@@ -165,11 +228,106 @@ def _body_torso_profile(
     )
 
 
+def _body_pants_profile(
+    vertices: np.ndarray,
+) -> tuple[
+    float,
+    float,
+    float,
+    float,
+    float,
+    float,
+    float,
+    float,
+    float,
+    float,
+    np.ndarray,
+    np.ndarray,
+    np.ndarray,
+    np.ndarray | None,
+]:
+    bounds = np.vstack((vertices.min(axis=0), vertices.max(axis=0)))
+    body_height = float(bounds[1, 1] - bounds[0, 1])
+    if body_height <= 0 or body_height < 0.55 * max(
+        bounds[1, 0] - bounds[0, 0],
+        bounds[1, 2] - bounds[0, 2],
+    ):
+        raise GarmentPipelineError(
+            "La malla corporal debe estar erguida y usar el eje Y como vertical."
+        )
+
+    center_x = float(np.median(vertices[:, 0]))
+    body_width = float(bounds[1, 0] - bounds[0, 0])
+    normalized_y = (vertices[:, 1] - bounds[0, 1]) / body_height
+    central_limit = max(body_width * 0.20, body_height * 0.14)
+    hip_widths = []
+    hip_depths = []
+    hip_centers_x = []
+    hip_centers_z = []
+    for fraction in (0.52, 0.54, 0.56):
+        band = np.abs(normalized_y - fraction) <= 0.02
+        samples = vertices[band & (np.abs(vertices[:, 0] - center_x) <= central_limit)]
+        if len(samples) < 8:
+            samples = vertices[band]
+        if len(samples) < 8:
+            continue
+        x_low, x_high = np.quantile(samples[:, 0], [0.05, 0.95])
+        z_low, z_high = np.quantile(samples[:, 2], [0.05, 0.95])
+        hip_widths.append(float(x_high - x_low))
+        hip_depths.append(float(z_high - z_low))
+        hip_centers_x.append(float((x_low + x_high) * 0.5))
+        hip_centers_z.append(float((z_low + z_high) * 0.5))
+
+    if not hip_widths or max(hip_widths) <= 0 or max(hip_depths) <= 0:
+        raise GarmentPipelineError(
+            "No se pudieron medir secciones fiables de la cadera para el pantalón."
+        )
+
+    low_fraction = 0.02
+    high_fraction = 0.57
+    centerline_fractions = np.linspace(low_fraction, high_fraction, 18)
+    centerline_x, centerline_z = _body_section_centers(
+        vertices,
+        centerline_fractions,
+        float(bounds[0, 1]),
+        body_height,
+    )
+    leg_centers = _bilateral_section_centers(
+        vertices,
+        normalized_y,
+        centerline_fractions,
+        center_x,
+    )
+    return (
+        max(hip_widths) * 1.22,
+        body_height * (high_fraction - low_fraction),
+        float(np.median(hip_centers_x)),
+        float(bounds[0, 1] + body_height * (low_fraction + high_fraction) * 0.5),
+        float(np.median(hip_centers_z)),
+        float(bounds[0, 1]),
+        body_height,
+        max(hip_depths) * 1.35,
+        low_fraction,
+        high_fraction,
+        centerline_fractions,
+        centerline_x,
+        centerline_z,
+        leg_centers,
+    )
+
+
 def load_garment_mesh(
     contents: bytes,
     filename: str,
     body_mesh: trimesh.Trimesh,
+    garment_type: str = "tshirt",
 ) -> GarmentBuildResult:
+    garment_type = garment_type.strip().lower()
+    if garment_type not in SUPPORTED_GARMENT_TYPES:
+        raise GarmentPipelineError(
+            "Tipo de prenda no admitido. Usa 'tshirt' o 'pants'."
+        )
+
     if not contents:
         raise GarmentPipelineError("El archivo de malla de prenda está vacío.")
     if len(contents) > MAX_GARMENT_MESH_BYTES:
@@ -245,19 +403,40 @@ def load_garment_mesh(
         )
 
     body_vertices = _validate_body_mesh(body_mesh)
-    (
-        target_width,
-        target_height,
-        centerline_fractions,
-        centerline_x,
-        centerline_z,
-        center_x,
-        center_y,
-        center_z,
-        body_min_y,
-        body_height,
-        target_depth,
-    ) = _body_torso_profile(body_vertices)
+    leg_centers = None
+    if garment_type == "pants":
+        (
+            target_width,
+            target_height,
+            center_x,
+            center_y,
+            center_z,
+            body_min_y,
+            body_height,
+            target_depth,
+            target_fraction_low,
+            target_fraction_high,
+            centerline_fractions,
+            centerline_x,
+            centerline_z,
+            leg_centers,
+        ) = _body_pants_profile(body_vertices)
+    else:
+        (
+            target_width,
+            target_height,
+            centerline_fractions,
+            centerline_x,
+            centerline_z,
+            center_x,
+            center_y,
+            center_z,
+            body_min_y,
+            body_height,
+            target_depth,
+        ) = _body_torso_profile(body_vertices)
+        target_fraction_low = float(centerline_fractions[0])
+        target_fraction_high = float(centerline_fractions[-1])
     if target_width <= 0 or target_height <= 0 or target_depth <= 0:
         raise GarmentPipelineError(
             "Las secciones del torso no tienen dimensiones válidas."
@@ -278,15 +457,133 @@ def load_garment_mesh(
     transform[:3, 3] = target_center - transform[:3, :3] @ source_center
     scene.apply_transform(transform)
 
-    target_fraction_low = centerline_fractions[0]
-    target_fraction_high = centerline_fractions[-1]
     target_y_low = body_min_y + body_height * target_fraction_low
     target_y_high = body_min_y + body_height * target_fraction_high
+    centerline_y = body_min_y + centerline_fractions * body_height
+    reference_x = float(np.interp(center_y, centerline_y, centerline_x))
+    reference_z = float(np.interp(center_y, centerline_y, centerline_z))
+    garment_leg_centers = None
+    if leg_centers is not None:
+        garment_world_vertices = []
+        for node in scene.graph.nodes_geometry:
+            node_transform, geometry_name = scene.graph[node]
+            geometry = scene.geometry[geometry_name]
+            garment_world_vertices.append(
+                trimesh.transform_points(
+                    np.asarray(geometry.vertices, dtype=np.float64),
+                    node_transform,
+                )
+            )
+        all_garment_vertices = np.concatenate(garment_world_vertices, axis=0)
+        garment_height_fraction = np.clip(
+            (all_garment_vertices[:, 1] - target_y_low) / target_height,
+            0.0,
+            1.0,
+        )
+        garment_body_fractions = (
+            target_fraction_low
+            + garment_height_fraction
+            * (target_fraction_high - target_fraction_low)
+        )
+        garment_leg_centers = _bilateral_section_centers(
+            all_garment_vertices,
+            garment_body_fractions,
+            centerline_fractions,
+            center_x,
+        )
 
+    for node in scene.graph.nodes_geometry:
+        node_transform, geometry_name = scene.graph[node]
+        inverse_transform = np.linalg.inv(node_transform)
+        geometry = scene.geometry[geometry_name]
+        world_vertices = trimesh.transform_points(
+            np.asarray(geometry.vertices, dtype=np.float64),
+            node_transform,
+        )
+        garment_height_fraction = np.clip(
+            (world_vertices[:, 1] - target_y_low) / target_height,
+            0.0,
+            1.0,
+        )
+        body_fractions = (
+            target_fraction_low
+            + garment_height_fraction
+            * (target_fraction_high - target_fraction_low)
+        )
+        target_x = np.interp(body_fractions, centerline_fractions, centerline_x)
+        target_z = np.interp(body_fractions, centerline_fractions, centerline_z)
+        world_vertices[:, 0] += target_x - reference_x
+        world_vertices[:, 2] += target_z - reference_z
+        if leg_centers is not None and garment_leg_centers is not None:
+            left_x = np.interp(
+                body_fractions, centerline_fractions, leg_centers[:, 0, 0]
+            )
+            right_x = np.interp(
+                body_fractions, centerline_fractions, leg_centers[:, 1, 0]
+            )
+            left_z = np.interp(
+                body_fractions, centerline_fractions, leg_centers[:, 0, 1]
+            )
+            right_z = np.interp(
+                body_fractions, centerline_fractions, leg_centers[:, 1, 1]
+            )
+            garment_left_x = np.interp(
+                body_fractions,
+                centerline_fractions,
+                garment_leg_centers[:, 0, 0],
+            )
+            garment_right_x = np.interp(
+                body_fractions,
+                centerline_fractions,
+                garment_leg_centers[:, 1, 0],
+            )
+            garment_left_z = np.interp(
+                body_fractions,
+                centerline_fractions,
+                garment_leg_centers[:, 0, 1],
+            )
+            garment_right_z = np.interp(
+                body_fractions,
+                centerline_fractions,
+                garment_leg_centers[:, 1, 1],
+            )
+            side_weight = np.clip(
+                (world_vertices[:, 0] - center_x) / (target_width * 0.12) + 0.5,
+                0.0,
+                1.0,
+            )
+            leg_blend = np.clip((0.52 - body_fractions) / 0.12, 0.0, 1.0)
+            leg_blend = leg_blend * leg_blend * (3.0 - 2.0 * leg_blend)
+            leg_offset_x = (
+                (left_x - garment_left_x - (target_x - reference_x))
+                * (1.0 - side_weight)
+                + (right_x - garment_right_x - (target_x - reference_x))
+                * side_weight
+            )
+            leg_offset_z = (
+                (left_z - garment_left_z - (target_z - reference_z))
+                * (1.0 - side_weight)
+                + (right_z - garment_right_z - (target_z - reference_z))
+                * side_weight
+            )
+            world_vertices[:, 0] += leg_blend * leg_offset_x
+            world_vertices[:, 2] += leg_blend * leg_offset_z
+        geometry.vertices = trimesh.transform_points(
+            world_vertices,
+            inverse_transform,
+        )
+
+    fit_region = "cadera y piernas" if garment_type == "pants" else "torso"
     warnings = [
-        "La geometría recibida se ajustó por secciones del torso SAM 3D y luego se simuló; no se reconstruyó desde una foto.",
+        f"La geometría recibida se ajustó por secciones de {fit_region} SAM 3D y luego se simuló; no se reconstruyó desde una foto.",
         "Antes de simular, Blender proyecta fuera del cuerpo los vértices de la prenda que empiezan en penetración.",
     ]
+    if garment_type == "pants" and (
+        leg_centers is None or garment_leg_centers is None
+    ):
+        warnings.append(
+            "La malla corporal no permitió separar ambas piernas; se aplicó un centrado general por altura."
+        )
     if mesh_format == "obj":
         warnings.append(
             "Un OBJ cargado sin sus archivos MTL/texturas conserva la geometría, pero puede quedar sin textura; usa GLB para materiales embebidos."
@@ -296,6 +593,7 @@ def load_garment_mesh(
         scene=scene,
         metrics={
             "geometry_source": "uploaded_garment_mesh",
+            "garment_type": garment_type,
             "source_format": mesh_format,
             "image_use": (
                 "embedded_or_mesh_materials" if mesh_format == "glb" else "none_or_external_obj"

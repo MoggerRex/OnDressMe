@@ -17,6 +17,18 @@ SIMULATION_PROFILES = {
         "shear": 8.0,
         "bending": 0.6,
         "collision_distance": 0.004,
+        "pin_fraction": 0.12,
+    },
+    "pants": {
+        "frames": 24,
+        "quality": 5,
+        "mass": 0.4,
+        "tension": 22.0,
+        "compression": 22.0,
+        "shear": 10.0,
+        "bending": 0.8,
+        "collision_distance": 0.006,
+        "pin_fraction": 0.16,
     },
 }
 
@@ -119,7 +131,7 @@ def clear_garment_penetrations(body_trees, garment_objects, clearance):
         print(f"BODY_CLEARANCE_VERTICES[{obj.name}]={projected}")
 
 
-def add_shoulder_pins(obj, settings):
+def add_top_edge_pins(obj, settings, pin_fraction):
     world_vertices = [obj.matrix_world @ vertex.co for vertex in obj.data.vertices]
     max_height = max(vertex.z for vertex in world_vertices)
     min_height = min(vertex.z for vertex in world_vertices)
@@ -128,9 +140,15 @@ def add_shoulder_pins(obj, settings):
         raise RuntimeError(f"La prenda {obj.name} no tiene altura válida.")
 
     pin_group = obj.vertex_groups.new(name="ShoulderHold")
-    pin_start = max_height - garment_height * 0.12
+    pin_start = max_height - garment_height * pin_fraction
     for index, vertex in enumerate(world_vertices):
-        weight = min(max((vertex.z - pin_start) / (garment_height * 0.06), 0.0), 1.0)
+        weight = min(
+            max(
+                (vertex.z - pin_start) / (garment_height * pin_fraction * 0.5),
+                0.0,
+            ),
+            1.0,
+        )
         if weight > 0:
             pin_group.add([index], weight, "REPLACE")
     settings.vertex_group_mass = pin_group.name
@@ -197,7 +215,7 @@ def main():
         collision.collision_quality = 3
         collision.distance_min = profile["collision_distance"]
         collision.self_distance_min = profile["collision_distance"]
-        add_shoulder_pins(obj, settings)
+        add_top_edge_pins(obj, settings, profile["pin_fraction"])
 
     scene = bpy.context.scene
     scene.gravity = (0.0, 0.0, -9.81)

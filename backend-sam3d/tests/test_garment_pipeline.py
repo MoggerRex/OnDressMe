@@ -5,6 +5,7 @@ import trimesh
 
 from services.garment_pipeline import (
     GarmentPipelineError,
+    _bilateral_section_centers,
     load_garment_mesh,
 )
 
@@ -55,6 +56,48 @@ class GarmentPipelineTests(unittest.TestCase):
         slanted_center_x = float(slanted.scene.bounds[:, 0].mean())
         self.assertGreater(slanted_center_x - baseline_center_x, 0.02)
 
+    def test_fits_pants_to_the_lower_body_range(self):
+        body = make_test_body()
+
+        result = load_garment_mesh(
+            make_mesh_bytes("glb"),
+            "pants.glb",
+            body,
+            "pants",
+        )
+
+        self.assertEqual(result.metrics["garment_type"], "pants")
+        self.assertAlmostEqual(result.metrics["fit_torso_y_min"], 0.04, places=4)
+        self.assertAlmostEqual(result.metrics["fit_torso_y_max"], 1.14, places=4)
+        self.assertAlmostEqual(float(result.scene.bounds[:, 1].min()), 0.04, places=4)
+        self.assertAlmostEqual(float(result.scene.bounds[:, 1].max()), 1.14, places=4)
+
+    def test_tracks_each_leg_center_instead_of_the_gap_between_legs(self):
+        vertices = []
+        for y in np.linspace(0.1, 0.75, 48):
+            for center_x in (-0.16, 0.13):
+                for angle in np.linspace(0, 2 * np.pi, 24, endpoint=False):
+                    vertices.append(
+                        [
+                            center_x + 0.055 * np.cos(angle),
+                            y,
+                            0.045 * np.sin(angle),
+                        ]
+                    )
+
+        fractions = np.linspace(0.02, 0.57, 18)
+        centers = _bilateral_section_centers(
+            np.asarray(vertices),
+            np.asarray([vertex[1] for vertex in vertices]),
+            fractions,
+            center_x=-0.015,
+        )
+
+        self.assertIsNotNone(centers)
+        lower_leg = int(np.argmin(np.abs(fractions - 0.25)))
+        self.assertAlmostEqual(centers[lower_leg, 0, 0], -0.16, delta=0.015)
+        self.assertAlmostEqual(centers[lower_leg, 1, 0], 0.13, delta=0.015)
+
     def test_accepts_garment3dgen_obj_geometry(self):
         result = load_garment_mesh(
             make_mesh_bytes("obj"),
@@ -73,6 +116,14 @@ class GarmentPipelineTests(unittest.TestCase):
 
         with self.assertRaises(GarmentPipelineError):
             load_garment_mesh(b"not a GLB", "shirt.glb", make_test_body())
+
+        with self.assertRaises(GarmentPipelineError):
+            load_garment_mesh(
+                make_mesh_bytes("glb"),
+                "shirt.glb",
+                make_test_body(),
+                "dress",
+            )
 
     def test_rejects_non_upright_body(self):
         body = make_test_body()

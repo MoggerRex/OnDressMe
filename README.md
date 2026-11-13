@@ -42,13 +42,13 @@ Abre la URL local que muestre Vite. El frontend consume por defecto `http://127.
 
 1. Selecciona una foto corporal y genera el maniquí con SAM 3D Body.
 2. Genera la geometría 3D de la prenda con Garment3DGen y su etapa de malla objetivo de InstantMesh, fuera de OnDressMe por el momento.
-3. Sube el archivo de la prenda (GLB, o el OBJ de salida de Garment3DGen) para ajustarlo inicialmente al torso y ejecutar una simulación estática en Blender.
+3. Selecciona camiseta o pantalón y sube su malla (GLB, o el OBJ de salida de Garment3DGen) para ajustarla a la región corporal correspondiente y ejecutar una simulación estática en Blender.
 4. El GLB simulado se muestra junto al cuerpo en el visor y puede descargarse.
 
 El backend expone:
 
 - `POST /generate-3d`: recibe el archivo multipart `image`, devuelve `avatar_output.glb` (`model/gltf-binary`) y un identificador `X-Avatar-Id`.
-- `POST /generate-garment`: recibe `garment_mesh` (GLB u OBJ), `avatar_id` y `garment_type=tshirt`; devuelve `garment_fitted.glb` y las métricas/advertencias en `X-Pipeline-Info`. Si se envía solo una imagen, responde HTTP 422 en lugar de fabricar una geometría aproximada.
+- `POST /generate-garment`: recibe `garment_mesh` (GLB u OBJ), `avatar_id` y `garment_type=tshirt|pants`; devuelve `garment_fitted.glb` y las métricas/advertencias en `X-Pipeline-Info`. Si se envía solo una imagen, responde HTTP 422 en lugar de fabricar una geometría aproximada.
 
 Los cuerpos se conservan temporalmente en memoria (máximo tres) y sus identificadores dejan de ser válidos al reiniciar FastAPI; genera de nuevo el maniquí si eso ocurre.
 
@@ -60,8 +60,8 @@ Esta aplicación todavía no ejecuta InstantMesh ni Garment3DGen. Para simular, 
 
 ### Limitaciones de esta etapa
 
-- Solo se admite camiseta de manga corta y una persona aproximadamente erguida.
-- OnDressMe no reconstruye actualmente la prenda desde la foto. La malla recibida se escala y centra con las dimensiones de secciones del torso; antes de la simulación Blender proyecta hacia fuera del cuerpo los vértices que empiezan penetrados.
+- Se admiten camisetas de manga corta y pantalones para una persona aproximadamente erguida. El pantalón se ajusta entre la cadera y los tobillos; la camiseta usa las secciones del torso.
+- OnDressMe no reconstruye actualmente la prenda desde la foto. La malla recibida se escala y centra con medidas corporales; antes de la simulación Blender proyecta hacia fuera del cuerpo los vértices que empiezan penetrados.
 - La simulación y exportación con Blender están integradas. La comprobación de intersecciones compara superficies triangulares y advierte si encuentra cruces; no demuestra ausencia de toda penetración volumétrica.
 - Se probó el ajuste y la simulación local con una malla corporal SAM 3D real generada desde `persona.png` y `camisa_star.glb`. El resultado se revisó desde frente y perfil; la calidad puede variar con la postura y las mallas de entrada.
 

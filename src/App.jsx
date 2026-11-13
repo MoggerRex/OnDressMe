@@ -13,6 +13,7 @@ import useObjectUrl from './hooks/useObjectUrl';
 
 export default function App() {
   const [bodyPhoto, setBodyPhoto] = useState(null);
+  const [garmentType, setGarmentType] = useState('tshirt');
   const [garmentMeshFile, setGarmentMeshFile] = useState(null);
   const [avatarBlob, setAvatarBlob] = useState(null);
   const [garmentBlob, setGarmentBlob] = useState(null);
@@ -53,7 +54,7 @@ export default function App() {
     setError('');
     setGarmentNotice('');
     try {
-      const result = await generateGarment(garmentMeshFile, avatarId);
+      const result = await generateGarment(garmentMeshFile, avatarId, garmentType);
       const pipelineInfo = JSON.parse(result.pipelineInfo || '{}');
       const intersectionPairs = pipelineInfo.metrics?.penetration_triangle_pairs;
       if (!Number.isSafeInteger(intersectionPairs) || intersectionPairs < 0) {
@@ -125,10 +126,29 @@ export default function App() {
           <div className="rounded-2xl border border-slate-800 bg-slate-900/70 p-5">
             <div className="mb-4 flex items-center gap-3">
               <Shirt className="text-violet-400" size={21} />
-              <h2 className="text-lg font-semibold">2. Camiseta</h2>
+              <h2 className="text-lg font-semibold">2. Prenda</h2>
             </div>
+            <label className="mb-2 block text-sm text-slate-300" htmlFor="garment-type">
+              Tipo de prenda
+            </label>
+            <select
+              id="garment-type"
+              value={garmentType}
+              disabled={!avatarId || avatarBusy || garmentBusy}
+              onChange={(event) => {
+                setGarmentType(event.target.value);
+                setGarmentMeshFile(null);
+                setGarmentBlob(null);
+                setGarmentNotice('');
+                setError('');
+              }}
+              className="mb-4 min-h-11 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 text-sm text-slate-100 disabled:opacity-50"
+            >
+              <option value="tshirt">Camiseta de manga corta</option>
+              <option value="pants">Pantalón</option>
+            </select>
             <label className="mb-3 block text-sm text-slate-300" htmlFor="garment-mesh">
-              Malla 3D de una camiseta (GLB u OBJ)
+              Malla 3D del {garmentType === 'pants' ? 'pantalón' : 'camiseta'} (GLB u OBJ)
             </label>
             <input
               id="garment-mesh"
@@ -159,7 +179,9 @@ export default function App() {
               ) : (
                 <Shirt size={17} />
               )}
-              {garmentBusy ? 'Ajustando y simulando...' : 'Simular camiseta'}
+              {garmentBusy
+                ? 'Ajustando y simulando...'
+                : `Simular ${garmentType === 'pants' ? 'pantalón' : 'camiseta'}`}
             </button>
             <p className="mt-3 text-xs leading-5 text-amber-200/80">
               Una foto no basta para esta etapa. Garment3DGen deforma una malla

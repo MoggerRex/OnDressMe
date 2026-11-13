@@ -31,6 +31,7 @@ from services.blender_simulator import (
 from services.garment_pipeline import (
     GarmentPipelineError,
     MAX_GARMENT_MESH_BYTES,
+    SUPPORTED_GARMENT_TYPES,
     load_garment_mesh,
 )
 
@@ -209,10 +210,10 @@ async def generate_garment(
             )
 
         garment_type = garment_type.strip().lower()
-        if garment_type != "tshirt":
+        if garment_type not in SUPPORTED_GARMENT_TYPES:
             raise HTTPException(
                 status_code=422,
-                detail="La primera versión solo admite camisetas de manga corta.",
+                detail="Tipo de prenda no admitido. Usa 'tshirt' o 'pants'.",
             )
 
         with _avatar_cache_lock:
@@ -233,6 +234,7 @@ async def generate_garment(
             mesh_bytes,
             garment_mesh.filename or "",
             body_mesh,
+            garment_type,
         )
         simulated_glb, _, penetration_pairs = await run_in_threadpool(
             simulate_static_garment,
