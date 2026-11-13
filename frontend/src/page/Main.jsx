@@ -8,11 +8,9 @@ import {
 	Info,
 	Maximize2,
 	Menu,
-	Moon,
 	Plus,
 	Shirt,
 	Sparkles,
-	Sun,
 	X,
 } from 'lucide-react';
 import { PiBaseballCap, PiCoatHanger, PiPants, PiSneaker } from 'react-icons/pi';
@@ -21,6 +19,20 @@ import OnboardingModal from '../features/onboarding/OnboardingModal.jsx';
 import '../App.css';
 
 const categories = ['Camisas', 'Pantalones', 'Accesorios', 'Calzado', 'Gorras'];
+const themeOptions = [
+	{ value: 'noir', label: 'Noir' },
+	{ value: 'light', label: 'Porcelana' },
+	{ value: 'amethyst', label: 'Amatista' },
+	{ value: 'ocean', label: 'Océano' },
+	{ value: 'forest', label: 'Bosque' },
+	{ value: 'rose', label: 'Rosa' },
+	{ value: 'amber', label: 'Ámbar' },
+	{ value: 'mint', label: 'Menta' },
+	{ value: 'sakura', label: 'Sakura' },
+	{ value: 'slate', label: 'Pizarra' },
+	{ value: 'terracotta', label: 'Terracota' },
+	{ value: 'cobalt', label: 'Cobalto' },
+];
 
 const wardrobe = [
 	{ id: 'sweater-blue', name: 'Suéter azul', category: 'Camisas', type: 'shirt', color: '#36546d', shade: 'Azul tinta' },
@@ -138,9 +150,11 @@ export default function Main() {
 	const [menuOpen, setMenuOpen] = useState(false);
 	const [theme, setTheme] = useState(() => {
 		try {
-			return window.localStorage.getItem('ondressme-theme') === 'light' ? 'light' : 'dark';
+			const storedTheme = window.localStorage.getItem('ondressme-theme');
+			if (storedTheme === 'dark') return 'noir';
+			return themeOptions.some((option) => option.value === storedTheme) ? storedTheme : 'noir';
 		} catch {
-			return 'dark';
+			return 'noir';
 		}
 	});
 	const [activeCategory, setActiveCategory] = useState('Camisas');
@@ -227,8 +241,8 @@ export default function Main() {
 		closetTrackRef.current?.scrollBy({ left: direction * 300, behavior: 'smooth' });
 	}
 
-	function toggleTheme() {
-		const nextTheme = theme === 'dark' ? 'light' : 'dark';
+	function selectTheme(event) {
+		const nextTheme = event.target.value;
 		setTheme(nextTheme);
 		try {
 			window.localStorage.setItem('ondressme-theme', nextTheme);
@@ -268,7 +282,7 @@ export default function Main() {
 					}}
 				/>
 			)}
-			<header className="topbar">
+			<header className="topbar relative z-50 flex h-[65px] items-center gap-[14px] border-b border-line bg-surface/90 px-[max(4.6vw,24px)] max-[700px]:h-[60px] max-[700px]:gap-[10px] max-[700px]:px-[14px]">
 				<button
 					aria-controls="main-navigation"
 					aria-expanded={menuOpen}
@@ -290,16 +304,12 @@ export default function Main() {
 					<a className={activeView === 'Profile' ? 'nav-link is-current' : 'nav-link'} href="#perfil" onClick={(event) => { event.preventDefault(); setActiveView('Profile'); setMenuOpen(false); }}>Perfil</a>
 				</nav>
 				<div className="header-actions">
-					<button
-						aria-label={theme === 'dark' ? 'Cambiar a tema claro' : 'Cambiar a tema oscuro'}
-						aria-pressed={theme === 'light'}
-						className="theme-toggle"
-						onClick={toggleTheme}
-						title={theme === 'dark' ? 'Cambiar a tema claro' : 'Cambiar a tema oscuro'}
-						type="button"
-					>
-						{theme === 'dark' ? <Sun size={18} /> : <Moon size={18} />}
-					</button>
+					<label className="theme-picker" title="Tema de color">
+						<span aria-hidden="true">Tema</span>
+						<select aria-label="Elegir tema de color" onChange={selectTheme} value={theme}>
+							{themeOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+						</select>
+					</label>
 					<button className="profile-menu" type="button" onClick={() => setActiveView('Profile')}>
 						<span className="profile-initials">{profileForm.name.slice(0, 2).toUpperCase() || 'E'}</span>
 						<span className="profile-copy"><strong>{profileForm.name}</strong><small>{profileForm.style}</small></span>
@@ -308,7 +318,7 @@ export default function Main() {
 				</div>
 			</header>
 
-			<main className="workspace" id="inicio">
+			<main className="workspace mx-auto mb-14 mt-5 w-[calc(100%-48px)] max-w-[1206px] max-[700px]:mt-[14px] max-[700px]:w-[calc(100%-28px)] max-[700px]:max-w-[540px]" id="inicio">
 				{activeView === 'Profile' ? (
 					<section className="profile-page" aria-labelledby="profile-page-title">
 						<div className="profile-page-header">
@@ -441,7 +451,7 @@ export default function Main() {
 					</section>
 				) : (
 					<>
-						<div className="workspace-grid">
+						<div className="workspace-grid grid grid-cols-1 items-stretch gap-3 min-[951px]:grid-cols-[minmax(0,1.85fr)_minmax(330px,1fr)] max-[950px]:grid-cols-[minmax(0,1.45fr)_minmax(295px,1fr)] max-[700px]:grid-cols-1">
 							<section className="simulator-panel" id="simulador" aria-labelledby="simulator-title">
 								<div className="panel-heading">
 									<div>
