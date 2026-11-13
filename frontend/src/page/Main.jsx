@@ -13,11 +13,11 @@ import {
 	Shirt,
 	Sparkles,
 	Sun,
-	UserRound,
 	X,
 } from 'lucide-react';
 import { PiBaseballCap, PiCoatHanger, PiPants, PiSneaker } from 'react-icons/pi';
 import MannequinCanvas from '../features/mannequin/MannequinScene.jsx';
+import OnboardingModal from '../features/onboarding/OnboardingModal.jsx';
 import '../App.css';
 
 const categories = ['Camisas', 'Pantalones', 'Accesorios', 'Calzado', 'Gorras'];
@@ -125,9 +125,9 @@ function SaveLookButton({ saved, onClick }) {
 		<button
 			aria-pressed={saved}
 			className={saved ? 'outline-button save-look-button is-saved' : 'outline-button save-look-button'}
-		onClick={onClick}
-		type="button"
-	>
+			onClick={onClick}
+			type="button"
+		>
 			<Check size={15} />{saved ? 'Look guardado' : 'Guardar look'}
 		</button>
 	);
@@ -241,16 +241,6 @@ export default function Main() {
 		setProfileForm((current) => ({ ...current, [field]: value }));
 	}
 
-	function saveProfile() {
-		try {
-			window.localStorage.setItem('ondressme-profile', JSON.stringify(profileForm));
-			window.localStorage.setItem('ondressme-profile-created', 'true');
-		} catch {
-			return;
-		}
-		setProfileModalOpen(false);
-	}
-
 	useEffect(() => {
 		if (!profileModalOpen) {
 			try {
@@ -263,6 +253,21 @@ export default function Main() {
 
 	return (
 		<div className="dressme-app" data-theme={theme}>
+			{profileModalOpen && (
+				<OnboardingModal
+					isOpen={profileModalOpen}
+					initialProfile={profileForm}
+					onComplete={(newProfile) => {
+						setProfileForm(newProfile);
+						try {
+							window.localStorage.setItem('ondressme-profile-created', 'true');
+						} catch {
+							// Keep the completed profile in memory if browser storage is unavailable.
+						}
+						setProfileModalOpen(false);
+					}}
+				/>
+			)}
 			<header className="topbar">
 				<button
 					aria-controls="main-navigation"
@@ -296,67 +301,14 @@ export default function Main() {
 						{theme === 'dark' ? <Sun size={18} /> : <Moon size={18} />}
 					</button>
 					<button className="profile-menu" type="button" onClick={() => setActiveView('Profile')}>
-						<span className="profile-initials">EG</span>
-						<span className="profile-copy"><strong>Eva García</strong><small>Invierno profundo</small></span>
+						<span className="profile-initials">{profileForm.name.slice(0, 2).toUpperCase() || 'E'}</span>
+						<span className="profile-copy"><strong>{profileForm.name}</strong><small>{profileForm.style}</small></span>
 						<ArrowRight size={15} aria-hidden="true" />
 					</button>
 				</div>
 			</header>
 
 			<main className="workspace" id="inicio">
-				{profileModalOpen && (
-					<div className="profile-modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="profile-modal-title">
-						<div className="profile-modal-card">
-							<div className="profile-modal-header">
-								<div className="profile-modal-icon"><UserRound size={18} /></div>
-								<div>
-									<span className="eyebrow">Bienvenida</span>
-									<h2 id="profile-modal-title">Crea tu perfil</h2>
-								</div>
-							</div>
-							<label className="profile-field">
-								<span>Nombre</span>
-								<input
-									placeholder="Tu nombre"
-									type="text"
-									value={profileForm.name}
-									onChange={(event) => handleProfileChange('name', event.target.value)}
-								/>
-							</label>
-							<label className="profile-field">
-								<span>Estilo</span>
-								<input
-									placeholder="Ej. Invierno profundo"
-									type="text"
-									value={profileForm.style}
-									onChange={(event) => handleProfileChange('style', event.target.value)}
-								/>
-							</label>
-							<div className="profile-upload-box">
-								<div className="profile-upload-copy">
-									<strong>Foto de tu rostro</strong>
-									<p>Sube una imagen para preparar la colorimetría y la recomendación de paleta.</p>
-								</div>
-								<label className="profile-upload-trigger">
-									<input
-										type="file"
-										accept="image/*"
-										onChange={(event) => {
-											const file = event.target.files?.[0];
-											if (file) handleProfileChange('photoName', file.name);
-										}}
-									/>
-									<span>Subir foto</span>
-								</label>
-							</div>
-							<div className="profile-upload-note">Archivo actual: {profileForm.photoName}</div>
-							<div className="profile-modal-actions">
-								<button className="ghost-button" type="button" onClick={() => setProfileModalOpen(false)}>Más tarde</button>
-								<button className="action-button" type="button" onClick={saveProfile}>Guardar perfil</button>
-							</div>
-						</div>
-					</div>
-				)}
 				{activeView === 'Profile' ? (
 					<section className="profile-page" aria-labelledby="profile-page-title">
 						<div className="profile-page-header">
@@ -405,7 +357,7 @@ export default function Main() {
 				) : activeView === 'Closet' ? (
 					<section className="closet-library" id="closet" aria-labelledby="closet-library-title">
 						<div className="closet-library-heading">
-					
+
 							<div className="closet-library-title-row">
 								<h1 id="closet-library-title">Tu clóset</h1>
 								<button className="outline-button add-closet-item" type="button"><span className="add-garment-icon" aria-hidden="true"><Shirt size={16} /><Plus size={9} /></span> Añadir prenda</button>
@@ -488,202 +440,202 @@ export default function Main() {
 						</section>
 					</section>
 				) : (
-				<>
-				<div className="workspace-grid">
-					<section className="simulator-panel" id="simulador" aria-labelledby="simulator-title">
-						<div className="panel-heading">
-							<div>
-								<span className="eyebrow">Simulador</span>
-								<h1 id="simulator-title">{activeView === 'Avatar' ? 'Tu avatar' : 'Tu maniquí'}</h1>
-							</div>
-							<button className="icon-button" type="button" title="Ampliar visor" aria-label="Ampliar visor">
-								<Maximize2 size={17} />
-							</button>
-						</div>
-						<div className="simulator-stage-row">
-						<div
-							className={activeView === 'DressMe' ? 'avatar-stage has-outfit-slots' : 'avatar-stage'}
-							id="avatar"
-							style={{
-								'--stage-top': stageColors[undertone].top,
-								'--stage-middle': stageColors[undertone].middle,
-								'--stage-floor': stageColors[undertone].floor,
-							}}
-						>
-							{activeView === 'DressMe' && (
-								<aside className="outfit-slots" aria-label="Prendas elegidas para el avatar">
-									<div className="outfit-slot-list">
-										{outfitSlots.map(({ category, item }) => {
-											const SlotIcon = categoryIcons[category];
-											return (
+					<>
+						<div className="workspace-grid">
+							<section className="simulator-panel" id="simulador" aria-labelledby="simulator-title">
+								<div className="panel-heading">
+									<div>
+										<span className="eyebrow">Simulador</span>
+										<h1 id="simulator-title">{activeView === 'Avatar' ? 'Tu avatar' : 'Tu maniquí'}</h1>
+									</div>
+									<button className="icon-button" type="button" title="Ampliar visor" aria-label="Ampliar visor">
+										<Maximize2 size={17} />
+									</button>
+								</div>
+								<div className="simulator-stage-row">
+									<div
+										className={activeView === 'DressMe' ? 'avatar-stage has-outfit-slots' : 'avatar-stage'}
+										id="avatar"
+										style={{
+											'--stage-top': stageColors[undertone].top,
+											'--stage-middle': stageColors[undertone].middle,
+											'--stage-floor': stageColors[undertone].floor,
+										}}
+									>
+										{activeView === 'DressMe' && (
+											<aside className="outfit-slots" aria-label="Prendas elegidas para el avatar">
+												<div className="outfit-slot-list">
+													{outfitSlots.map(({ category, item }) => {
+														const SlotIcon = categoryIcons[category];
+														return (
+															<button
+																aria-label={`${category}: ${item.name}`}
+																aria-pressed={activeCategory === category}
+																className={activeCategory === category ? 'outfit-slot is-active' : 'outfit-slot'}
+																key={category}
+																onClick={() => setActiveCategory(category)}
+																title={`${category}: ${item.name}`}
+																type="button"
+															>
+																<span className="outfit-slot-visual" style={{ '--garment-color': item.color }}>
+																	<SlotIcon size={34} strokeWidth={1.5} />
+																</span>
+															</button>
+														);
+													})}
+												</div>
+											</aside>
+										)}
+										<div className="height-markers" aria-hidden="true">
+											<span>190</span><i /><span>175</span><i /><span>155</span><i />
+										</div>
+										<div className="undertone-controls" aria-label="Subtono de piel">
+											{[
+												['Cálido', '#f08225'],
+												['Frío', '#a8d7e8'],
+												['Neutro', '#aeb1b5'],
+											].map(([label, color]) => (
 												<button
-													aria-label={`${category}: ${item.name}`}
-													aria-pressed={activeCategory === category}
-													className={activeCategory === category ? 'outfit-slot is-active' : 'outfit-slot'}
-													key={category}
-													onClick={() => setActiveCategory(category)}
-													title={`${category}: ${item.name}`}
+													className={undertone === label ? 'undertone-option is-selected' : 'undertone-option'}
+													key={label}
+													onClick={() => setUndertone(label)}
 													type="button"
 												>
-													<span className="outfit-slot-visual" style={{ '--garment-color': item.color }}>
-														<SlotIcon size={34} strokeWidth={1.5} />
+													<span style={{ backgroundColor: color }} />{label}
+												</button>
+											))}
+										</div>
+										<MannequinCanvas
+											shirtColor={selectedItems.shirt.color}
+											pantsColor={selectedItems.pants.color}
+											accessoryColor={selectedItems.accessory.color}
+											shoesColor={selectedItems.shoes.color}
+											hatColor={selectedItems.hat.color}
+											bodyMetrics={bodyMetrics}
+										/>
+										<div className="rotate-hint"><span>↔</span> Arrastra para rotar</div>
+									</div>
+								</div>
+								<div className={activeView === 'Avatar' ? 'look-score' : 'look-score is-hidden'} id="perfil">
+									{activeView === 'Avatar' && <SaveLookButton saved={saved} onClick={toggleSaveCurrentLook} />}
+								</div>
+							</section>
+
+							{activeView === 'Avatar' ? (
+								<aside className="metrics-panel" id="avatar-metrics" aria-labelledby="metrics-title">
+									<div className="metrics-heading">
+										<div className="closet-icon"><UserRound size={18} /></div>
+										<div><span className="eyebrow">Métricas corporales</span><h2 id="metrics-title">Define tu cuerpo</h2></div>
+									</div>
+									<div className="metric-summary">
+										<div className="metric-card"><small>Altura</small><strong>{bodyMetrics.height}<span> cm</span></strong></div>
+										<div className="metric-card"><small>Peso</small><strong>{bodyMetrics.weight}<span> kg</span></strong></div>
+									</div>
+									<div className="measurements-title">
+										<strong>Proporciones generales</strong>
+										<small>Los cambios se reflejan en el avatar</small>
+									</div>
+									<div className="measurement-grid">
+										{metricFields.map((field) => (
+											<label className="measure-control" key={field.key}>
+												<span className="measure-label"><span>{field.label}</span><strong>{formatMetric(field, bodyMetrics[field.key])}</strong></span>
+												<input
+													aria-label={field.label}
+													max={field.max}
+													min={field.min}
+													onChange={(event) => {
+														setBodyMetrics((current) => ({ ...current, [field.key]: Number(event.target.value) }));
+														setMeasurementsSaved(false);
+													}}
+													step="1"
+													type="range"
+													value={bodyMetrics[field.key]}
+												/>
+											</label>
+										))}
+									</div>
+									<div className="measurements-footer">
+										<span><Info size={13} /> Tus medidas se guardan en este dispositivo.</span>
+										<button className={measurementsSaved ? 'outline-button is-saved' : 'outline-button'} onClick={() => setMeasurementsSaved(true)} type="button">
+											<Check size={14} />{measurementsSaved ? 'Medidas guardadas' : 'Guardar medidas'}
+										</button>
+									</div>
+								</aside>
+							) : (
+								<aside className="closet-panel" id="closet" aria-labelledby="closet-title">
+									<div className="closet-heading">
+										<div className="closet-icon"><Shirt size={18} /></div>
+										<div><span className="eyebrow">Clóset digital</span><h2 id="closet-title">Tu ropa</h2></div>
+										{activeView === 'DressMe' && <SaveLookButton saved={saved} onClick={toggleSaveCurrentLook} />}
+									</div>
+									<div className="category-tabs" role="tablist" aria-label="Categorías de prendas">
+										{categories.map((category) => (
+											<CategoryTab
+												category={category}
+												isActive={activeCategory === category}
+												key={category}
+												onClick={() => setActiveCategory(category)}
+											/>
+										))}
+									</div>
+									<h3 className="items-heading">{activeCategory}<span>{visibleItems.length} prendas</span></h3>
+									<div className="wardrobe-grid">
+										{visibleItems.map((item, index) => {
+											const ItemIcon = categoryIcons[item.category];
+											const isSelected = selectedItems[item.type].id === item.id;
+											return (
+												<button
+													aria-label={item.name}
+													aria-pressed={isSelected}
+													className={isSelected ? 'wardrobe-item is-selected' : 'wardrobe-item'}
+													key={item.id}
+													onClick={() => previewItem(item)}
+													style={{ '--item-index': index }}
+													type="button"
+												>
+													<span className="garment-preview" style={{ '--garment-color': item.color }}>
+														<ItemIcon size={42} strokeWidth={1.35} />
+														{isSelected && <span className="garment-check"><Check size={12} strokeWidth={2.5} /></span>}
 													</span>
+													<span className="wardrobe-item-name">{item.name}</span>
 												</button>
 											);
 										})}
 									</div>
+									<div className="closet-actions">
+										<button className="action-button" type="button"><span className="add-garment-icon" aria-hidden="true"><Shirt size={16} /><Plus size={9} /></span> Añadir prenda</button>
+										<button className="action-button" onClick={() => setActiveView('Closet')} type="button">Ver clóset completo <PiCoatHanger size={15} /></button>
+									</div>
+									<div className="outfit-palette">
+										<div className="palette-title"><span className="eyebrow">Paleta del outfit</span><Sparkles size={14} /></div>
+										<div className="selected-swatches" aria-label="Colores del outfit">
+											{[selectedItems.shirt, selectedItems.pants, selectedItems.accessory].map((item) => (
+												<span key={item.type} title={item.shade} style={{ backgroundColor: item.color }} />
+											))}
+										</div>
+									</div>
+									{activeView === 'DressMe' && (
+										<section className="recommendation-panel closet-palette-panel" aria-labelledby="recommendation-title">
+											<div className="recommendation-copy">
+												<span className="eyebrow">Recomendación</span>
+												<h2 id="recommendation-title">Tu paleta hoy</h2>
+												<p>Combina bases profundas con acentos fríos y luminosos.</p>
+											</div>
+											<div className="season-palette">
+												{palette.map((color) => (
+													<div className="season-color" key={color.name}>
+														<span style={{ backgroundColor: color.color }} />
+														<small>{color.name}</small>
+													</div>
+												))}
+											</div>
+											<button className="guide-button" type="button">Ver guía completa <ArrowRight size={16} /></button>
+										</section>
+									)}
 								</aside>
 							)}
-							<div className="height-markers" aria-hidden="true">
-								<span>190</span><i /><span>175</span><i /><span>155</span><i />
-							</div>
-							<div className="undertone-controls" aria-label="Subtono de piel">
-								{[
-									['Cálido', '#f08225'],
-									['Frío', '#a8d7e8'],
-									['Neutro', '#aeb1b5'],
-								].map(([label, color]) => (
-									<button
-										className={undertone === label ? 'undertone-option is-selected' : 'undertone-option'}
-										key={label}
-										onClick={() => setUndertone(label)}
-										type="button"
-									>
-										<span style={{ backgroundColor: color }} />{label}
-									</button>
-								))}
-							</div>
-							<MannequinCanvas
-								shirtColor={selectedItems.shirt.color}
-								pantsColor={selectedItems.pants.color}
-								accessoryColor={selectedItems.accessory.color}
-								shoesColor={selectedItems.shoes.color}
-								hatColor={selectedItems.hat.color}
-								bodyMetrics={bodyMetrics}
-							/>
-							<div className="rotate-hint"><span>↔</span> Arrastra para rotar</div>
 						</div>
-						</div>
-						<div className={activeView === 'Avatar' ? 'look-score' : 'look-score is-hidden'} id="perfil">
-							{activeView === 'Avatar' && <SaveLookButton saved={saved} onClick={toggleSaveCurrentLook} />}
-						</div>
-					</section>
-
-					{activeView === 'Avatar' ? (
-						<aside className="metrics-panel" id="avatar-metrics" aria-labelledby="metrics-title">
-							<div className="metrics-heading">
-								<div className="closet-icon"><UserRound size={18} /></div>
-								<div><span className="eyebrow">Métricas corporales</span><h2 id="metrics-title">Define tu cuerpo</h2></div>
-							</div>
-							<div className="metric-summary">
-								<div className="metric-card"><small>Altura</small><strong>{bodyMetrics.height}<span> cm</span></strong></div>
-								<div className="metric-card"><small>Peso</small><strong>{bodyMetrics.weight}<span> kg</span></strong></div>
-							</div>
-							<div className="measurements-title">
-								<strong>Proporciones generales</strong>
-								<small>Los cambios se reflejan en el avatar</small>
-							</div>
-							<div className="measurement-grid">
-								{metricFields.map((field) => (
-									<label className="measure-control" key={field.key}>
-										<span className="measure-label"><span>{field.label}</span><strong>{formatMetric(field, bodyMetrics[field.key])}</strong></span>
-										<input
-											aria-label={field.label}
-											max={field.max}
-											min={field.min}
-											onChange={(event) => {
-												setBodyMetrics((current) => ({ ...current, [field.key]: Number(event.target.value) }));
-												setMeasurementsSaved(false);
-											}}
-											step="1"
-											type="range"
-											value={bodyMetrics[field.key]}
-										/>
-									</label>
-								))}
-							</div>
-							<div className="measurements-footer">
-								<span><Info size={13} /> Tus medidas se guardan en este dispositivo.</span>
-								<button className={measurementsSaved ? 'outline-button is-saved' : 'outline-button'} onClick={() => setMeasurementsSaved(true)} type="button">
-									<Check size={14} />{measurementsSaved ? 'Medidas guardadas' : 'Guardar medidas'}
-								</button>
-							</div>
-						</aside>
-					) : (
-					<aside className="closet-panel" id="closet" aria-labelledby="closet-title">
-						<div className="closet-heading">
-							<div className="closet-icon"><Shirt size={18} /></div>
-							<div><span className="eyebrow">Clóset digital</span><h2 id="closet-title">Tu ropa</h2></div>
-							{activeView === 'DressMe' && <SaveLookButton saved={saved} onClick={toggleSaveCurrentLook} />}
-						</div>
-						<div className="category-tabs" role="tablist" aria-label="Categorías de prendas">
-							{categories.map((category) => (
-								<CategoryTab
-									category={category}
-									isActive={activeCategory === category}
-									key={category}
-									onClick={() => setActiveCategory(category)}
-								/>
-							))}
-						</div>
-						<h3 className="items-heading">{activeCategory}<span>{visibleItems.length} prendas</span></h3>
-						<div className="wardrobe-grid">
-							{visibleItems.map((item, index) => {
-								const ItemIcon = categoryIcons[item.category];
-								const isSelected = selectedItems[item.type].id === item.id;
-								return (
-									<button
-										aria-label={item.name}
-										aria-pressed={isSelected}
-										className={isSelected ? 'wardrobe-item is-selected' : 'wardrobe-item'}
-										key={item.id}
-										onClick={() => previewItem(item)}
-										style={{ '--item-index': index }}
-										type="button"
-									>
-										<span className="garment-preview" style={{ '--garment-color': item.color }}>
-											<ItemIcon size={42} strokeWidth={1.35} />
-											{isSelected && <span className="garment-check"><Check size={12} strokeWidth={2.5} /></span>}
-										</span>
-										<span className="wardrobe-item-name">{item.name}</span>
-									</button>
-								);
-							})}
-						</div>
-						<div className="closet-actions">
-							<button className="action-button" type="button"><span className="add-garment-icon" aria-hidden="true"><Shirt size={16} /><Plus size={9} /></span> Añadir prenda</button>
-							<button className="action-button" onClick={() => setActiveView('Closet')} type="button">Ver clóset completo <PiCoatHanger size={15} /></button>
-						</div>
-						<div className="outfit-palette">
-							<div className="palette-title"><span className="eyebrow">Paleta del outfit</span><Sparkles size={14} /></div>
-							<div className="selected-swatches" aria-label="Colores del outfit">
-								{[selectedItems.shirt, selectedItems.pants, selectedItems.accessory].map((item) => (
-									<span key={item.type} title={item.shade} style={{ backgroundColor: item.color }} />
-								))}
-							</div>
-						</div>
-						{activeView === 'DressMe' && (
-							<section className="recommendation-panel closet-palette-panel" aria-labelledby="recommendation-title">
-								<div className="recommendation-copy">
-									<span className="eyebrow">Recomendación</span>
-									<h2 id="recommendation-title">Tu paleta hoy</h2>
-									<p>Combina bases profundas con acentos fríos y luminosos.</p>
-								</div>
-								<div className="season-palette">
-									{palette.map((color) => (
-										<div className="season-color" key={color.name}>
-											<span style={{ backgroundColor: color.color }} />
-											<small>{color.name}</small>
-										</div>
-									))}
-								</div>
-								<button className="guide-button" type="button">Ver guía completa <ArrowRight size={16} /></button>
-							</section>
-						)}
-						</aside>
-					)}
-				</div>
-				</>
+					</>
 				)}
 			</main>
 			<footer className="page-footer" aria-hidden="true" />
