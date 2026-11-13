@@ -1,5 +1,4 @@
 import io
-import json
 import logging
 import os
 import shutil
@@ -25,15 +24,18 @@ sys.path.append(repo_path)
 
 from sam_3d_body import SAM3DBodyEstimator, load_sam_3d_body_hf
 from sam_3d_body.metadata.mhr70 import mhr_names
-from services.blender_simulator import (
-    GarmentSimulationError,
-    simulate_static_garment,
-)
+from services.blender_simulator import GarmentSimulationError
 from services.garment_pipeline import (
     GarmentPipelineError,
     MAX_GARMENT_MESH_BYTES,
     SUPPORTED_GARMENT_TYPES,
-    load_garment_mesh,
+)
+from services.garment_library import (
+    GarmentLibraryError,
+    body_fingerprint,
+    get_garment,
+    list_garments,
+    process_or_reuse_garment,
 )
 
 app = FastAPI(title="OnDressMe 3D Generation Server")
@@ -41,10 +43,19 @@ logger = logging.getLogger(__name__)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    allow_origins=[
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "http://[::1]:5173",
+    ],
     allow_methods=["*"],
     allow_headers=["*"],
-    expose_headers=["X-Avatar-Id", "X-Pipeline-Info"],
+    expose_headers=[
+        "X-Avatar-Id",
+        "X-Pipeline-Info",
+        "X-Garment-Id",
+        "X-Garment-Cached",
+    ],
 )
 
 _MAX_CACHED_AVATARS = 3
@@ -74,6 +85,19 @@ def _remember_avatar(
         while len(_avatar_cache) > _MAX_CACHED_AVATARS:
             _avatar_cache.popitem(last=False)
     return avatar_id
+
+
+def _cached_avatar(avatar_id: str):
+    with _avatar_cache_lock:
+        cached_avatar = _avatar_cache.get(avatar_id)
+        if cached_avatar is None:
+            return None, None
+        body_mesh = cached_avatar[0].copy()
+        body_landmarks = {
+            name: point.copy()
+            for name, point in cached_avatar[1].items()
+        }
+    return body_mesh, body_landmarks
 
 
 if not torch.cuda.is_available():
@@ -245,7 +269,6 @@ async def generate_garment(
     garment_type: str = Form(default="tshirt"),
     image: UploadFile | None = File(default=None),
 ):
-    output_dir = None
     try:
         if image is not None:
             raise HTTPException(
@@ -269,17 +292,7 @@ async def generate_garment(
                 detail="Tipo de prenda no admitido. Usa 'tshirt' o 'pants'.",
             )
 
-        with _avatar_cache_lock:
-            cached_avatar = _avatar_cache.get(avatar_id)
-            if cached_avatar is not None:
-                body_mesh = cached_avatar[0].copy()
-                body_landmarks = {
-                    name: point.copy()
-                    for name, point in cached_avatar[1].items()
-                }
-            else:
-                body_mesh = None
-                body_landmarks = None
+        body_mesh, body_landmarks = _cached_avatar(avatar_id)
         if body_mesh is None or body_landmarks is None:
             raise HTTPException(
                 status_code=404,
@@ -290,62 +303,101 @@ async def generate_garment(
             )
 
         mesh_bytes = await garment_mesh.read(MAX_GARMENT_MESH_BYTES + 1)
-        build = load_garment_mesh(
+        if len(mesh_bytes) > MAX_GARMENT_MESH_BYTES:
+            raise HTTPException(
+                status_code=413,
+                detail="La malla de prenda supera el límite de 64 MB.",
+            )
+
+        result = await run_in_threadpool(
+            process_or_reuse_garment,
+            body_mesh,
+            body_landmarks,
             mesh_bytes,
             garment_mesh.filename or "",
-            body_mesh,
-            garment_type,
-            body_landmarks=body_landmarks,
-        )
-        simulated_glb, _, penetration_pairs = await run_in_threadpool(
-            simulate_static_garment,
-            body_mesh,
-            build.scene,
             garment_type,
         )
-
-        build.metrics["simulation"] = "blender_completed"
-        build.metrics["penetration_check"] = "triangle_surface_intersections"
-        build.metrics["penetration_triangle_pairs"] = penetration_pairs
-        warnings = build.warnings
-        if penetration_pairs:
-            warnings += (
-                "La comprobación BVH encontró "
-                f"{penetration_pairs} pares de triángulos intersectados; revisa el resultado.",
-            )
-        pipeline_info = json.dumps(
-            {"metrics": build.metrics, "warnings": warnings},
-            ensure_ascii=True,
-            separators=(",", ":"),
-        )
-
-        output_dir = tempfile.mkdtemp(prefix="ondressme-garment-")
-        output_path = os.path.join(output_dir, "garment_fitted.glb")
-        with open(output_path, "wb") as output_file:
-            output_file.write(simulated_glb)
 
         return FileResponse(
-            output_path,
+            result.file_path,
             media_type="model/gltf-binary",
-            filename="garment_fitted.glb",
-            headers={"X-Pipeline-Info": pipeline_info},
-            background=BackgroundTask(shutil.rmtree, output_dir),
+            filename=result.item["download_filename"],
+            headers={
+                "X-Pipeline-Info": result.pipeline_info,
+                "X-Garment-Id": result.item["id"],
+                "X-Garment-Cached": str(result.cached).lower(),
+            },
         )
     except HTTPException:
-        if output_dir and os.path.exists(output_dir):
-            shutil.rmtree(output_dir)
         raise
     except GarmentPipelineError as error:
-        if output_dir and os.path.exists(output_dir):
-            shutil.rmtree(output_dir)
         raise HTTPException(status_code=422, detail=str(error)) from error
     except GarmentSimulationError as error:
-        if output_dir and os.path.exists(output_dir):
-            shutil.rmtree(output_dir)
         logger.exception("No se pudo completar la simulación de la prenda.")
         raise HTTPException(status_code=503, detail=str(error)) from error
+    except GarmentLibraryError as error:
+        logger.exception("No se pudo guardar o reutilizar la prenda.")
+        raise HTTPException(status_code=500, detail=str(error)) from error
     except Exception as error:
-        if output_dir and os.path.exists(output_dir):
-            shutil.rmtree(output_dir)
         logger.exception("Error procesando la prenda.")
+        raise HTTPException(status_code=500, detail=str(error)) from error
+
+
+@app.get("/wardrobe/{avatar_id}")
+async def get_wardrobe(avatar_id: str):
+    body_mesh, body_landmarks = _cached_avatar(avatar_id)
+    if body_mesh is None or body_landmarks is None:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                "No se encontró ese cuerpo SAM 3D. Genera el maniquí de nuevo "
+                "si reiniciaste el backend o creaste otro cuerpo."
+            ),
+        )
+    try:
+        body_id = await run_in_threadpool(
+            body_fingerprint,
+            body_mesh,
+            body_landmarks,
+        )
+        items = await run_in_threadpool(list_garments, body_id)
+        return {"items": items}
+    except GarmentLibraryError as error:
+        logger.exception("No se pudo consultar la biblioteca local de prendas.")
+        raise HTTPException(status_code=500, detail=str(error)) from error
+
+
+@app.get("/wardrobe/{avatar_id}/{item_id}/model")
+async def get_wardrobe_model(avatar_id: str, item_id: str):
+    body_mesh, body_landmarks = _cached_avatar(avatar_id)
+    if body_mesh is None or body_landmarks is None:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                "No se encontró ese cuerpo SAM 3D. Genera el maniquí de nuevo "
+                "si reiniciaste el backend o creaste otro cuerpo."
+            ),
+        )
+    try:
+        body_id = await run_in_threadpool(
+            body_fingerprint,
+            body_mesh,
+            body_landmarks,
+        )
+        garment = await run_in_threadpool(get_garment, body_id, item_id)
+        if garment is None:
+            raise HTTPException(
+                status_code=404,
+                detail="La prenda no pertenece a la biblioteca de este maniquí.",
+            )
+        item, file_path = garment
+        return FileResponse(
+            file_path,
+            media_type="model/gltf-binary",
+            filename=item["download_filename"],
+        )
+    except HTTPException:
+        raise
+    except GarmentLibraryError as error:
+        logger.exception("No se pudo cargar la prenda de la biblioteca.")
         raise HTTPException(status_code=500, detail=str(error)) from error

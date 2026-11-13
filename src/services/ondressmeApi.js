@@ -1,12 +1,20 @@
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000';
 
-async function requestGlb(endpoint, formData) {
+async function responseError(response) {
+  let detail = `La solicitud falló (HTTP ${response.status}).`;
+  try {
+    const payload = await response.json();
+    if (typeof payload.detail === 'string') detail = payload.detail;
+  } catch {
+    // Keep the HTTP status when the server does not return JSON.
+  }
+  return new Error(detail);
+}
+
+async function requestGlb(endpoint, options) {
   let response;
   try {
-    response = await fetch(`${API_BASE_URL}${endpoint}`, {
-      method: 'POST',
-      body: formData,
-    });
+    response = await fetch(`${API_BASE_URL}${endpoint}`, options);
   } catch {
     throw new Error(
       'No se pudo conectar con FastAPI. Verifica que el backend esté ejecutándose en el puerto 8000.',
@@ -14,14 +22,7 @@ async function requestGlb(endpoint, formData) {
   }
 
   if (!response.ok) {
-    let detail = `La solicitud falló (HTTP ${response.status}).`;
-    try {
-      const payload = await response.json();
-      if (typeof payload.detail === 'string') detail = payload.detail;
-    } catch {
-      // Keep the HTTP status when the server does not return JSON.
-    }
-    throw new Error(detail);
+    throw await responseError(response);
   }
 
   const contentType = response.headers.get('content-type') || '';
@@ -40,7 +41,10 @@ async function requestGlb(endpoint, formData) {
 export async function generateAvatar(imageFile) {
   const formData = new FormData();
   formData.append('image', imageFile);
-  const { blob, response } = await requestGlb('/generate-3d', formData);
+  const { blob, response } = await requestGlb('/generate-3d', {
+    method: 'POST',
+    body: formData,
+  });
   return {
     blob,
     avatarId: response.headers.get('x-avatar-id'),
@@ -56,9 +60,58 @@ export async function generateGarment(meshFile, avatarId, garmentType = 'tshirt'
   formData.append('garment_mesh', meshFile);
   formData.append('avatar_id', avatarId);
   formData.append('garment_type', garmentType);
-  const { blob, response } = await requestGlb('/generate-garment', formData);
+  const { blob, response } = await requestGlb('/generate-garment', {
+    method: 'POST',
+    body: formData,
+  });
+  const garmentId = response.headers.get('x-garment-id');
+  if (!garmentId) {
+    throw new Error('El backend no devolvió el identificador de la prenda guardada.');
+  }
   return {
     blob,
     pipelineInfo: response.headers.get('x-pipeline-info'),
+    garmentId,
+    cached: response.headers.get('x-garment-cached') === 'true',
   };
+}
+
+export async function listWardrobe(avatarId) {
+  let response;
+  try {
+    response = await fetch(
+      `${API_BASE_URL}/wardrobe/${encodeURIComponent(avatarId)}`,
+    );
+  } catch {
+    throw new Error(
+      'No se pudo conectar con FastAPI para cargar la biblioteca de prendas.',
+    );
+  }
+  if (!response.ok) throw await responseError(response);
+
+  const payload = await response.json();
+  if (!Array.isArray(payload.items)) {
+    throw new Error('El backend devolvió una biblioteca de prendas inválida.');
+  }
+  return payload.items;
+}
+
+export async function getGarmentModel(avatarId, garmentId) {
+  const endpoint = getGarmentModelUrl(avatarId, garmentId);
+  try {
+    const { blob } = await requestGlb(endpoint, { method: 'GET' });
+    return blob;
+  } catch (error) {
+    if (error.message.startsWith('No se pudo conectar con FastAPI')) {
+      throw new Error(
+        'El GLB sigue guardado localmente, pero FastAPI debe estar activo para cargarlo en el navegador por primera vez.',
+        { cause: error },
+      );
+    }
+    throw error;
+  }
+}
+
+export function getGarmentModelUrl(avatarId, garmentId) {
+  return `${API_BASE_URL}/wardrobe/${encodeURIComponent(avatarId)}/${encodeURIComponent(garmentId)}/model`;
 }

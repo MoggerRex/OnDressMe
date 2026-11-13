@@ -43,12 +43,20 @@ Abre la URL local que muestre Vite. El frontend consume por defecto `http://127.
 1. Selecciona una foto corporal y genera el maniquí con SAM 3D Body.
 2. Genera la geometría 3D de la prenda con Garment3DGen y su etapa de malla objetivo de InstantMesh, fuera de OnDressMe por el momento.
 3. Selecciona camiseta o pantalón y sube su malla (GLB, o el OBJ de salida de Garment3DGen) para ajustarla a la región corporal correspondiente y ejecutar una simulación estática en Blender.
-4. El GLB simulado se muestra junto al cuerpo en el visor y puede descargarse.
+4. El GLB simulado se guarda en la biblioteca local de ese cuerpo y aparece en el armario.
+5. Viste al maniquí arrastrando una prenda al visor o usando el botón «Vestir». Camiseta y pantalón pueden mostrarse juntos.
+
+La biblioteca se almacena en `backend-sam3d/storage/wardrobe/`, fuera del repositorio. Usa la huella de la malla y las anclas corporales para separar prendas por cuerpo; subir la misma malla para el mismo cuerpo y tipo reutiliza el GLB y no vuelve a ejecutar Blender. Si reinicias FastAPI, genera de nuevo el maniquí para consultar y usar su biblioteca.
+
+El visor carga únicamente las prendas del conjunto actual y libera sus recursos gráficos al quitarlas. Conserva una caché LRU limitada a 32 MB de GLB comprimidos durante la sesión, así que quitar y volver a vestir no requiere FastAPI. Después de recargar la página, FastAPI debe estar activo para transferir al navegador los modelos que aún no estén en su caché.
 
 El backend expone:
 
 - `POST /generate-3d`: recibe el archivo multipart `image`, devuelve `avatar_output.glb` (`model/gltf-binary`) y un identificador `X-Avatar-Id`.
-- `POST /generate-garment`: recibe `garment_mesh` (GLB u OBJ), `avatar_id` y `garment_type=tshirt|pants`; devuelve `garment_fitted.glb` y las métricas/advertencias en `X-Pipeline-Info`. Si se envía solo una imagen, responde HTTP 422 en lugar de fabricar una geometría aproximada.
+- `POST /generate-garment`: recibe `garment_mesh` (GLB u OBJ), `avatar_id` y `garment_type=tshirt|pants`; devuelve el GLB guardado y las métricas/advertencias en `X-Pipeline-Info`. También devuelve `X-Garment-Id` y `X-Garment-Cached`.
+- `GET /wardrobe/{avatar_id}`: lista las prendas persistidas para el cuerpo de ese avatar.
+- `GET /wardrobe/{avatar_id}/{item_id}/model`: entrega el GLB guardado para vestir o descargarlo.
+- Si se envía solo una imagen, `POST /generate-garment` responde HTTP 422 en lugar de fabricar una geometría aproximada.
 
 Los cuerpos se conservan temporalmente en memoria (máximo tres) y sus identificadores dejan de ser válidos al reiniciar FastAPI; genera de nuevo el maniquí si eso ocurre.
 

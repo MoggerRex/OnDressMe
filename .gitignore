@@ -28,6 +28,7 @@ backend-sam3d/sam-3d-body/
 backend-sam3d/__pycache__/
 backend-sam3d/services/__pycache__/
 backend-sam3d/tests/__pycache__/
+backend-sam3d/storage/wardrobe/
 
 # Archivos 3D exportados de prueba
 *.obj
