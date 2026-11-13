@@ -1,7 +1,9 @@
-import { useEffect, useState } from 'react';
-import { AnimatePresence, motion } from 'framer-motion';
-import { AlertCircle, ArrowRight, Camera, CheckCircle2, RefreshCw, Sparkles, User } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import { motion } from 'framer-motion';
+import { AlertCircle, ArrowDown, ArrowRight, Check, CheckCircle2, Camera, ImagePlus, RefreshCw, Sparkles, X } from 'lucide-react';
 import { API_BASE_URL } from '../../services/api';
+import ClosetWorldScene from './ClosetWorldScene.jsx';
+import './onboarding.css';
 
 const colorimetryTranslations = {
 	seasons: { Otoño: 'Autumn', Primavera: 'Spring', Invierno: 'Winter', Verano: 'Summer' },
@@ -42,12 +44,20 @@ function localizeColorimetryError(message) {
 }
 
 export default function OnboardingModal({ isOpen, onComplete, initialProfile }) {
-	const [step, setStep] = useState(1);
+	const dialogRef = useRef(null);
+	const scrollRef = useRef(null);
+	const pointerRef = useRef({ x: 0, y: 0 });
+	const journeyProgressRef = useRef(0);
+	const [scrollProgress, setScrollProgress] = useState(0);
 	const [profileName, setProfileName] = useState(initialProfile?.name || 'Eva Garcia');
+	const [profileEmail, setProfileEmail] = useState(initialProfile?.email || '');
+	const [emailTouched, setEmailTouched] = useState(false);
 	const [faceFile, setFaceFile] = useState(null);
 	const [facePreview, setFacePreview] = useState(null);
 	const [bodyFile, setBodyFile] = useState(null);
 	const [bodyPreview, setBodyPreview] = useState(null);
+	const [clothingFile, setClothingFile] = useState(null);
+	const [clothingPreview, setClothingPreview] = useState(null);
 	const [analyzing, setAnalyzing] = useState(false);
 	const [colorimetryResult, setColorimetryResult] = useState(null);
 	const [errorMsg, setErrorMsg] = useState(null);
@@ -55,7 +65,8 @@ export default function OnboardingModal({ isOpen, onComplete, initialProfile }) 
 	useEffect(() => () => {
 		if (facePreview) URL.revokeObjectURL(facePreview);
 		if (bodyPreview) URL.revokeObjectURL(bodyPreview);
-	}, [facePreview, bodyPreview]);
+		if (clothingPreview) URL.revokeObjectURL(clothingPreview);
+	}, [facePreview, bodyPreview, clothingPreview]);
 
 	useEffect(() => {
 		if (!isOpen) return undefined;
@@ -64,6 +75,10 @@ export default function OnboardingModal({ isOpen, onComplete, initialProfile }) 
 		return () => {
 			document.body.style.overflow = previousOverflow;
 		};
+	}, [isOpen]);
+
+	useEffect(() => {
+		if (isOpen) dialogRef.current?.focus();
 	}, [isOpen]);
 
 	if (!isOpen) return null;
@@ -103,6 +118,13 @@ export default function OnboardingModal({ isOpen, onComplete, initialProfile }) 
 		}
 	}
 
+	function handleClothingUpload(event) {
+		const file = event.target.files?.[0];
+		if (!file) return;
+		setClothingFile(file);
+		setClothingPreview(URL.createObjectURL(file));
+	}
+
 	function handleBodyUpload(event) {
 		const file = event.target.files?.[0];
 		if (!file) return;
@@ -113,134 +135,149 @@ export default function OnboardingModal({ isOpen, onComplete, initialProfile }) 
 	function handleFinish() {
 		onComplete({
 			name: profileName.trim(),
+			email: profileEmail.trim(),
 			style: colorimetryResult
 				? `${colorimetryResult.season} (${colorimetryResult.undertone})`
-				: initialProfile?.style || 'Estilo Personalizado',
+				: initialProfile?.style || 'Personal style',
 			photoName: faceFile?.name || initialProfile?.photoName || 'No photo',
 			bodyPhoto: bodyFile?.name || initialProfile?.bodyPhoto || null,
+			clothingPhoto: clothingFile?.name || initialProfile?.clothingPhoto || null,
 		});
 	}
 
+	function handleScroll(event) {
+		const element = event.currentTarget;
+		const distance = element.scrollHeight - element.clientHeight;
+		const progress = distance > 0 ? element.scrollTop / distance : 0;
+		journeyProgressRef.current = progress;
+		setScrollProgress(progress);
+	}
+
+	function scrollTo(id) {
+		scrollRef.current?.querySelector(`#${id}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+	}
+
+	function handlePointerMove(event) {
+		const bounds = event.currentTarget.getBoundingClientRect();
+		pointerRef.current = {
+			x: ((event.clientX - bounds.left) / bounds.width) * 2 - 1,
+			y: ((event.clientY - bounds.top) / bounds.height) * 2 - 1,
+		};
+	}
+
+	const emailIsValid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(profileEmail.trim());
+
 	return (
-		<div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4 backdrop-blur-md">
-			<motion.div
-				initial={{ opacity: 0, scale: 0.96, y: 16 }}
-				animate={{ opacity: 1, scale: 1, y: 0 }}
-				className="flex max-h-[calc(100dvh-2rem)] w-full max-w-2xl flex-col overflow-hidden rounded-xl border border-[#3c3c44] bg-[#1c1c20] shadow-2xl"
-				role="dialog"
-				aria-modal="true"
-				aria-labelledby="onboarding-title"
-			>
-				<header className="flex items-center justify-between border-b border-[#35353d] bg-[#26262b] px-5 py-4 sm:px-6">
-					<div className="flex items-center gap-3">
-						<span className="flex h-9 w-9 items-center justify-center rounded-full bg-[#863bff]/20 text-[#a9c8e4]">
-							<Sparkles size={17} aria-hidden="true" />
-						</span>
-						<div>
-							<span className="text-[10px] font-semibold uppercase tracking-widest text-[#a9c8e4]">Style setup</span>
-							<h2 id="onboarding-title" className="text-sm font-medium text-white">Personalize your experience</h2>
-						</div>
-					</div>
-					<span className="text-xs text-[#b8b7bf]">Step {step} of 2</span>
+		<div className="closet-onboarding fixed inset-0 z-[300] overflow-hidden" ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="onboarding-title" onKeyDown={(event) => { if (event.key === 'Escape') handleFinish(); }} onPointerMove={handlePointerMove} tabIndex={-1}>
+			<div className="onboarding-world-backdrop" aria-hidden="true">
+				<ClosetWorldScene progress={journeyProgressRef} hasClothing={Boolean(clothingFile)} hasPortrait={Boolean(facePreview)} hasBodyPhoto={Boolean(bodyPreview)} pointer={pointerRef} />
+			</div>
+			<div className="onboarding-scroll h-full overflow-y-auto overscroll-contain" onScroll={handleScroll} ref={scrollRef}>
+				<div className="onboarding-progress" aria-hidden="true"><span style={{ transform: `scaleX(${scrollProgress})` }} /></div>
+				<header className="onboarding-header sticky top-0 z-20 flex h-[68px] items-center justify-between px-6 sm:px-10">
+					<a className="onboarding-wordmark" href="#onboarding-start" onClick={(event) => { event.preventDefault(); scrollTo('onboarding-start'); }} aria-label="OnDressMe, beginning">ONDRESSME<span> / PERSONAL STYLE STUDIO</span></a>
+					<button className="onboarding-skip inline-flex items-center gap-2 px-3 py-2 text-xs" type="button" onClick={handleFinish}>Skip and explore <X size={14} /></button>
 				</header>
 
-				<div className="min-h-0 flex-1 overflow-y-auto p-5 sm:p-8">
-					<AnimatePresence mode="wait">
-						{step === 1 ? (
-							<motion.section key="colorimetry" initial={{ opacity: 0, x: -16 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: 16 }} className="space-y-5" aria-labelledby="colorimetry-title">
-								<div>
-									<p className="text-xs font-semibold uppercase tracking-wider text-[#a7c7e5]">Step 1 · Color analysis</p>
-									<h3 id="colorimetry-title" className="mt-1 font-['Carrois_Gothic'] text-2xl text-white">Find the colors that suit you</h3>
-									<p className="mt-2 text-sm leading-relaxed text-[#b8b7bf]">Add a face photo to receive a color analysis. You can also continue without a photo.</p>
-								</div>
+				<nav className="onboarding-chapter-nav" aria-label="Onboarding chapters">
+					{[
+						['onboarding-start', 'The closet'],
+						['onboarding-mirror', 'Your colors'],
+						['onboarding-fitting', 'Your fitting'],
+						['onboarding-rail', 'Your wardrobe'],
+						['onboarding-profile', 'Your details'],
+					].map(([id, label], index) => (
+						<button aria-label={`Go to ${label}`} aria-current={Math.min(4, Math.floor(scrollProgress * 5 + 0.25)) === index ? 'step' : undefined} key={id} onClick={() => scrollTo(id)} type="button"><span>{`0${index + 1}`}</span><i /></button>
+					))}
+				</nav>
 
-								<div className="space-y-2 rounded-lg border border-[#393942] bg-[#242429] p-4">
-									<strong className="flex items-center gap-2 text-xs uppercase tracking-wider text-white"><Camera size={15} className="text-[#a7c7e5]" /> Photo tips</strong>
-									<ul className="list-inside list-disc space-y-1 text-xs text-[#b8b7bf]">
-										<li>Use natural light and look straight ahead.</li>
-										<li>Remove glasses, hats, and accessories that cast shadows.</li>
-										<li>Avoid filters and heavy makeup.</li>
-									</ul>
-								</div>
+				<main>
+					<section className="onboarding-chapter onboarding-hero" id="onboarding-start" aria-labelledby="onboarding-title">
+						<motion.div className="onboarding-hero-copy" initial={{ opacity: 0, y: 24 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 1, ease: [0.2, 0.7, 0.15, 1] }}>
+							<p className="onboarding-kicker">YOUR WORLD, JUST AHEAD</p>
+							<h1 id="onboarding-title">Come in.<br /><span>Make it yours.</span></h1>
+							<p className="onboarding-intro">A little light. A favorite piece. A different way to see yourself.</p>
+						</motion.div>
+						<button className="onboarding-scroll-cue" onClick={() => scrollTo('onboarding-mirror')} type="button"><span>Step inside</span><ArrowDown size={15} /></button>
+						<span className="onboarding-side-note onboarding-side-note-left" aria-hidden="true">A PERSONAL FITTING ROOM</span>
+						<span className="onboarding-side-note onboarding-side-note-right" aria-hidden="true">EST. YOURSELF</span>
+					</section>
 
-								<div>
-									<label className="block text-xs font-medium text-[#d0cfd6]" htmlFor="onboarding-name">Your name or nickname</label>
-									<input id="onboarding-name" type="text" value={profileName} onChange={(event) => setProfileName(event.target.value)} className="mt-2 w-full rounded-lg border border-[#3c3c46] bg-[#151518] px-4 py-3 text-sm text-white outline-none focus:border-[#a7c7e5]" />
-								</div>
+					<section className="onboarding-chapter onboarding-mirror" id="onboarding-mirror" aria-labelledby="palette-title">
+						<div className="onboarding-section-index"><span>01</span><i /> THE MIRROR</div>
+						<div className="onboarding-chapter-grid mirror-grid">
+							<motion.div className="onboarding-mirror-art" initial={{ opacity: 0, scale: 0.94 }} whileInView={{ opacity: 1, scale: 1 }} viewport={{ once: true, amount: 0.25 }} transition={{ duration: 0.8 }}>
+								<div className="onboarding-mirror-glass">{facePreview ? <img src={facePreview} alt="Portrait preview" /> : <div><Camera size={30} /><span>YOUR REFLECTION<br />IN NATURAL LIGHT</span></div>}</div>
+								<span className="onboarding-mirror-light mirror-light-one" /><span className="onboarding-mirror-light mirror-light-two" />
+								<div className="onboarding-mirror-caption">A NEW WAY TO SEE YOURSELF</div>
+							</motion.div>
+							<div className="onboarding-story-copy">
+								<p className="onboarding-kicker">A LITTLE LIGHT CHANGES EVERYTHING</p>
+								<h2 id="palette-title">Meet the colors<br />that <em>feel like you.</em></h2>
+								<p className="onboarding-body-copy">A natural-light portrait can reveal the tones that bring your features forward. No pressure, just a new way to look at yourself.</p>
+								<label className="onboarding-upload-button" htmlFor="onboarding-face-photo"><span className="onboarding-upload-icon"><Camera size={18} /></span><span><strong>{faceFile ? 'Choose another portrait' : 'Add a portrait'}</strong><small>Optional · JPG or PNG</small></span><ArrowRight size={16} /><input accept="image/*" className="sr-only" id="onboarding-face-photo" onChange={handleFaceUpload} type="file" /></label>
+								{analyzing && <p className="onboarding-status" role="status"><RefreshCw className="animate-spin" size={15} /> Reading your palette...</p>}
+								{errorMsg && <p className="onboarding-error" role="alert"><AlertCircle size={15} />{errorMsg}</p>}
+								{colorimetryResult && <motion.div className="onboarding-reading" initial={{ opacity: 0, y: 18 }} animate={{ opacity: 1, y: 0 }} aria-live="polite"><span className="onboarding-reading-label"><CheckCircle2 size={14} /> YOUR COLOR READING</span><strong>{colorimetryResult.season}</strong><p>{colorimetryResult.description}</p><div>{colorimetryResult.undertone} undertone <i /> {colorimetryResult.contrast} contrast</div></motion.div>}
+								<p className="onboarding-photo-advice">For the clearest reading: face a window, look toward the camera, and let your skin be in its natural light.</p>
+							</div>
+						</div>
+						<button className="onboarding-next-cue" onClick={() => scrollTo('onboarding-fitting')} type="button">Continue into the fitting room <ArrowDown size={14} /></button>
+					</section>
 
-								<label className="flex min-h-36 cursor-pointer flex-col items-center justify-center gap-2 rounded-lg border border-dashed border-[#454550] bg-[#17171b] p-5 text-center transition-colors hover:border-[#a7c7e5]">
-									<input type="file" accept="image/*" onChange={handleFaceUpload} className="sr-only" />
-									{facePreview ? (
-										<>
-											<img src={facePreview} alt="Face photo preview" className="h-20 w-20 rounded-full border-2 border-[#a7c7e5] object-cover" />
-											<span className="flex items-center gap-1 text-xs font-medium text-emerald-400"><CheckCircle2 size={14} /> {faceFile?.name}</span>
-										</>
-									) : (
-										<>
-											<span className="flex h-11 w-11 items-center justify-center rounded-full bg-[#26262c] text-[#a7c7e5]"><Camera size={21} /></span>
-											<strong className="text-sm text-white">Choose a face photo</strong>
-											<span className="text-xs text-[#8e8d96]">JPG or PNG · optional</span>
-										</>
-									)}
-								</label>
+					<section className="onboarding-chapter onboarding-fitting" id="onboarding-fitting" aria-labelledby="fitting-title">
+						<div className="onboarding-section-index"><span>02</span><i /> THE FITTING ROOM</div>
+						<div className="onboarding-chapter-grid fitting-grid">
+							<div className="onboarding-story-copy">
+								<p className="onboarding-kicker">A SILHOUETTE, MADE PERSONAL</p>
+								<h2 id="fitting-title">Your shape.<br /><em>Your way.</em></h2>
+								<p className="onboarding-body-copy">Bring a full-body photo into the room. We will use it as a guide while your 3D mannequin waits for its first look.</p>
+								<label className="onboarding-upload-button" htmlFor="onboarding-body-photo"><span className="onboarding-upload-icon"><ImagePlus size={18} /></span><span><strong>{bodyFile ? 'Choose another photo' : 'Add a full-body photo'}</strong><small>Optional · JPG or PNG</small></span><ArrowRight size={16} /><input accept="image/*" className="sr-only" id="onboarding-body-photo" onChange={handleBodyUpload} type="file" /></label>
+								<p className="onboarding-photo-advice">Your photo stays in this preview. Only its filename is saved with your profile.</p>
+							</div>
+							<motion.div className="onboarding-fitting-display" initial={{ opacity: 0, y: 24 }} whileInView={{ opacity: 1, y: 0 }} viewport={{ once: true, amount: 0.2 }} transition={{ duration: 0.8 }}>
+								<div className="onboarding-body-photo">{bodyPreview ? <img src={bodyPreview} alt="Full-body photo preview" /> : <div><ImagePlus size={23} /><span>YOUR PHOTO<br />IN THE FITTING ROOM</span></div>}</div>
+								<span className="onboarding-fitting-label">YOUR 3D MANNEQUIN <i /> READY TO STYLE</span>
+							</motion.div>
+						</div>
+						<button className="onboarding-next-cue" onClick={() => scrollTo('onboarding-rail')} type="button">Find your first piece <ArrowDown size={14} /></button>
+					</section>
 
-								{analyzing && <p className="flex items-center justify-center gap-2 rounded-lg border border-[#383842] bg-[#22222a] py-3 text-xs text-[#a7c7e5]" role="status"><RefreshCw className="animate-spin" size={15} /> Analyzing your color palette...</p>}
-								{errorMsg && <p className="flex items-start gap-2 rounded-lg border border-rose-800/60 bg-rose-950/40 p-3 text-xs text-rose-300" role="alert"><AlertCircle size={15} className="shrink-0" /> {errorMsg}</p>}
+					<section className="onboarding-chapter onboarding-rail" id="onboarding-rail" aria-labelledby="closet-story-title">
+						<div className="onboarding-section-index"><span>03</span><i /> THE WARDROBE</div>
+						<div className="onboarding-chapter-grid rail-grid">
+							<div className="onboarding-story-copy">
+								<p className="onboarding-kicker">START WITH SOMETHING YOU LOVE</p>
+								<h2 id="closet-story-title">Everyday pieces.<br /><em>New possibilities.</em></h2>
+								<p className="onboarding-body-copy">Add a shirt from your closet. Watch it take its place on the rail, ready to meet the rest of your style.</p>
+								<p className="onboarding-photo-advice">A clear photo of one item works best. The image is shown here as a local preview.</p>
+								<label className="onboarding-upload-button" htmlFor="onboarding-clothing-photo"><span className="onboarding-upload-icon"><ImagePlus size={18} /></span><span><strong>{clothingFile ? 'Add another shirt' : 'Add a shirt'}</strong><small>Optional · a piece you reach for</small></span><ArrowRight size={16} /><input accept="image/*" className="sr-only" id="onboarding-clothing-photo" onChange={handleClothingUpload} type="file" /></label>
+							</div>
+							<motion.div className={clothingPreview ? 'onboarding-garment-frame has-garment' : 'onboarding-garment-frame'} initial={{ opacity: 0, x: 28 }} whileInView={{ opacity: 1, x: 0 }} viewport={{ once: true, amount: 0.2 }} transition={{ duration: 0.7 }}>
+								{clothingPreview ? <><img src={clothingPreview} alt="Uploaded clothing item preview" /><span className="onboarding-added-tag"><CheckCircle2 size={13} /> ADDED TO YOUR RAIL</span></> : <div className="onboarding-garment-placeholder"><div className="onboarding-garment-hanger" /><Sparkles size={24} strokeWidth={1.2} /><span>YOUR FIRST PIECE<br />IS WAITING</span></div>}
+								<span className="onboarding-frame-caption">A LITTLE OF YOUR WORLD</span>
+							</motion.div>
+						</div>
+						<button className="onboarding-next-cue" onClick={() => scrollTo('onboarding-profile')} type="button">Make it yours <ArrowDown size={14} /></button>
+					</section>
 
-								{colorimetryResult && (
-									<div className="space-y-2 rounded-lg border border-[#424250] bg-[#23232a] p-4" aria-live="polite">
-										<div className="flex flex-wrap items-center justify-between gap-2">
-											<strong className="text-xs uppercase tracking-wider text-[#a9c8e4]">Analysis complete</strong>
-											<span className="rounded-full bg-[#863bff]/20 px-2.5 py-1 text-xs font-semibold text-[#d8c4ff]">{colorimetryResult.season}</span>
-										</div>
-										<p className="text-xs leading-relaxed text-[#d1d0d8]">{colorimetryResult.description}</p>
-										<p className="text-xs text-[#9b99a4]">Undertone: {colorimetryResult.undertone} · Contrast: {colorimetryResult.contrast}</p>
-									</div>
-								)}
-							</motion.section>
-						) : (
-							<motion.section key="silhouette" initial={{ opacity: 0, x: 16 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -16 }} className="space-y-5" aria-labelledby="silhouette-title">
-								<div>
-									<p className="text-xs font-semibold uppercase tracking-wider text-[#a7c7e5]">Step 2 · Body shape</p>
-									<h3 id="silhouette-title" className="mt-1 font-['Carrois_Gothic'] text-2xl text-white">Set up your avatar</h3>
-									<p className="mt-2 text-sm leading-relaxed text-[#b8b7bf]">The photo is optional and is not uploaded; only its filename will be saved to your profile.</p>
-								</div>
+					<section className="onboarding-chapter onboarding-profile" id="onboarding-profile" aria-labelledby="identity-title">
+						<div className="onboarding-section-index"><span>04</span><i /> THE FINAL DETAIL</div>
+						<motion.div className="onboarding-profile-copy" initial={{ opacity: 0, y: 20 }} whileInView={{ opacity: 1, y: 0 }} viewport={{ once: true, amount: 0.25 }} transition={{ duration: 0.7 }}>
+							<p className="onboarding-kicker">A FEW WORDS, THEN YOU ARE IN</p>
+							<h2 id="identity-title">What should<br />we call <em>you?</em></h2>
+							<div className="onboarding-identity-fields">
+								<label className="onboarding-name-field" htmlFor="onboarding-name"><span>Your name or nickname</span><input autoComplete="given-name" id="onboarding-name" maxLength={48} onChange={(event) => setProfileName(event.target.value)} placeholder="Your name" required type="text" value={profileName} /></label>
+								<label className="onboarding-name-field" htmlFor="onboarding-email"><span>Your email</span><input aria-describedby="onboarding-email-feedback" aria-invalid={emailTouched && !emailIsValid} autoComplete="email" id="onboarding-email" onBlur={() => setEmailTouched(true)} onChange={(event) => setProfileEmail(event.target.value)} placeholder="you@example.com" required type="email" value={profileEmail} />{emailTouched && !emailIsValid && <small className="onboarding-email-error" id="onboarding-email-feedback" role="alert">Enter a valid email address to continue.</small>}</label>
+							</div>
+							<p className="onboarding-soft-note">Your fitting room is ready{profileName.trim() ? `, ${profileName.trim()}` : ''}. Your details are saved on this device.</p>
+							<button className="onboarding-enter-button" disabled={!profileName.trim() || !emailIsValid} onClick={handleFinish} type="button">Enter your closet <ArrowRight size={17} /></button>
+						</motion.div>
+					</section>
+				</main>
 
-								<label className="flex min-h-48 cursor-pointer flex-col items-center justify-center gap-3 rounded-lg border border-dashed border-[#454550] bg-[#17171b] p-6 text-center transition-colors hover:border-[#a7c7e5]">
-									<input type="file" accept="image/*" onChange={handleBodyUpload} className="sr-only" />
-									{bodyPreview ? (
-										<>
-											<img src={bodyPreview} alt="Full-body photo preview" className="h-36 rounded-lg border border-[#a7c7e5] object-cover" />
-											<span className="flex items-center gap-1 text-xs font-medium text-emerald-400"><CheckCircle2 size={14} /> {bodyFile?.name}</span>
-										</>
-									) : (
-										<>
-											<span className="flex h-11 w-11 items-center justify-center rounded-full bg-[#26262c] text-[#a7c7e5]"><User size={21} /></span>
-											<strong className="text-sm text-white">Add a full-body photo</strong>
-											<span className="text-xs text-[#8e8d96]">Optional · stays on this device while you complete your profile</span>
-										</>
-									)}
-								</label>
-
-								<div className="flex items-start gap-3 rounded-lg border border-[#383842] bg-[#222228] p-4 text-sm text-[#b8b7bf]"><Sparkles size={17} className="mt-0.5 shrink-0 text-[#a7c7e5]" /><p>Your profile will be ready to explore the virtual closet, mix and match clothes, and try color recommendations.</p></div>
-							</motion.section>
-						)}
-					</AnimatePresence>
-				</div>
-
-				<footer className="flex items-center justify-between gap-3 border-t border-[#35353d] bg-[#222227] px-5 py-4 sm:px-6">
-					{step === 2 ? (
-						<button type="button" onClick={() => setStep(1)} className="px-3 py-2 text-xs font-semibold text-[#d0cfd6] transition-colors hover:text-white">Back</button>
-					) : (
-						<button type="button" onClick={handleFinish} className="px-3 py-2 text-xs font-semibold text-[#d0cfd6] transition-colors hover:text-white">Skip for now</button>
-					)}
-					{step === 1 ? (
-						<button type="button" onClick={() => setStep(2)} disabled={analyzing || !profileName.trim()} className="flex items-center gap-2 rounded-lg bg-[#a7c7e5] px-5 py-2.5 text-xs font-bold text-[#151518] shadow-lg transition-colors hover:bg-[#bce0ff] disabled:cursor-not-allowed disabled:opacity-50">Continue <ArrowRight size={14} /></button>
-					) : (
-						<button type="button" onClick={handleFinish} className="flex items-center gap-2 rounded-lg bg-[#863bff] px-5 py-2.5 text-xs font-bold text-white shadow-lg transition-opacity hover:opacity-90">Start exploring <Sparkles size={14} /></button>
-					)}
-				</footer>
-			</motion.div>
+				<footer className="onboarding-footer"><span>ON DRESS ME <i /> YOUR STYLE, IN YOUR OWN WORDS</span><button disabled={!profileName.trim() || !emailIsValid} onClick={handleFinish} type="button">Enter the closet <ArrowRight size={14} /></button></footer>
+			</div>
 		</div>
 	);
 }

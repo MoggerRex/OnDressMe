@@ -162,11 +162,12 @@ export default function Main() {
 			const stored = JSON.parse(window.localStorage.getItem('ondressme-profile') || '{}');
 			return {
 				name: stored.name || 'Eva Garcia',
+				email: stored.email || '',
 				style: localizeSavedStyle(stored.style),
 				photoName: stored.photoName === 'Sin foto aún' ? 'No photo yet' : stored.photoName || 'No photo yet',
 			};
 		} catch {
-			return { name: 'Eva Garcia', style: 'Deep Winter', photoName: 'No photo yet' };
+			return { name: 'Eva Garcia', email: '', style: 'Deep Winter', photoName: 'No photo yet' };
 		}
 	});
 	const [profileModalOpen, setProfileModalOpen] = useState(() => {
