@@ -92,14 +92,6 @@ export default function MannequinCanvas({ shirtColor, pantsColor, accessoryColor
       <ambientLight intensity={1.15} />
       <directionalLight castShadow intensity={2.1} position={[3, 6, 4]} />
       <directionalLight intensity={0.75} position={[-4, 3, -2]} />
-      <mesh position={[0, -0.13, 0]} receiveShadow castShadow>
-        <cylinderGeometry args={[2.12, 2.12, 0.1, 64]} />
-        <meshStandardMaterial color="#505258" roughness={0.82} />
-      </mesh>
-      <mesh position={[0, -0.04, 0]} receiveShadow>
-        <cylinderGeometry args={[2.04, 2.04, 0.08, 64]} />
-        <meshStandardMaterial color="#777a80" roughness={0.92} />
-      </mesh>
       <Mannequin
         accessoryColor={accessoryColor}
         hatColor={hatColor}
@@ -108,7 +100,7 @@ export default function MannequinCanvas({ shirtColor, pantsColor, accessoryColor
         shoesColor={shoesColor}
         bodyMetrics={bodyMetrics}
       />
-      <ContactShadows position={[0, 0.002, 0]} opacity={0.38} scale={4.5} blur={2.3} far={3.5} />
+      <ContactShadows position={[0, 0.002, 0]} opacity={0.3} scale={2.8} blur={2.3} far={3.5} />
       <OrbitControls
         enablePan={false}
         minDistance={4.5}
