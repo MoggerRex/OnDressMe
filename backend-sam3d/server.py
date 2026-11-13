@@ -24,6 +24,7 @@ repo_path = os.path.join(os.path.dirname(__file__), "sam-3d-body")
 sys.path.append(repo_path)
 
 from sam_3d_body import SAM3DBodyEstimator, load_sam_3d_body_hf
+from sam_3d_body.metadata.mhr70 import mhr_names
 from services.blender_simulator import (
     GarmentSimulationError,
     simulate_static_garment,
@@ -47,19 +48,29 @@ app.add_middleware(
 )
 
 _MAX_CACHED_AVATARS = 3
-_avatar_cache: OrderedDict[str, trimesh.Trimesh] = OrderedDict()
+_avatar_cache: OrderedDict[
+    str, tuple[trimesh.Trimesh, dict[str, np.ndarray]]
+] = OrderedDict()
 _avatar_cache_lock = threading.Lock()
 
 
-def _remember_avatar(vertices: np.ndarray, faces: np.ndarray) -> str:
+def _remember_avatar(
+    vertices: np.ndarray,
+    faces: np.ndarray,
+    landmarks: dict[str, np.ndarray],
+) -> str:
     avatar_id = uuid.uuid4().hex
     body_mesh = trimesh.Trimesh(
         vertices=vertices.copy(),
         faces=faces.copy(),
         process=False,
     )
+    body_landmarks = {
+        name: np.asarray(point, dtype=np.float64).copy()
+        for name, point in landmarks.items()
+    }
     with _avatar_cache_lock:
-        _avatar_cache[avatar_id] = body_mesh
+        _avatar_cache[avatar_id] = (body_mesh, body_landmarks)
         while len(_avatar_cache) > _MAX_CACHED_AVATARS:
             _avatar_cache.popitem(last=False)
     return avatar_id
@@ -134,6 +145,30 @@ def orient_body_vertices(vertices: np.ndarray) -> np.ndarray:
     return oriented_vertices
 
 
+def orient_body_keypoints(
+    keypoints: np.ndarray,
+    raw_body_vertices: np.ndarray,
+) -> np.ndarray:
+    oriented_keypoints = np.asarray(keypoints, dtype=np.float64).copy()
+    raw_vertices = np.asarray(raw_body_vertices, dtype=np.float64)
+    if (
+        oriented_keypoints.ndim != 2
+        or oriented_keypoints.shape[1] != 3
+        or not np.isfinite(oriented_keypoints).all()
+    ):
+        raise ValueError("SAM 3D Body devolvió puntos articulares inválidos.")
+
+    raw_vertices = raw_vertices.copy()
+    raw_vertices[:, 1:] *= -1
+    bounds = np.vstack((raw_vertices.min(axis=0), raw_vertices.max(axis=0)))
+    center = bounds.mean(axis=0)
+    oriented_keypoints[:, 1:] *= -1
+    oriented_keypoints[:, 0] -= center[0]
+    oriented_keypoints[:, 1] -= bounds[0, 1]
+    oriented_keypoints[:, 2] -= center[2]
+    return oriented_keypoints
+
+
 @app.post("/generate-3d")
 async def generate_3d(image: UploadFile = File(...)):
     output_dir = None
@@ -152,6 +187,24 @@ async def generate_3d(image: UploadFile = File(...)):
 
         vertices = orient_body_vertices(outputs[0]["pred_vertices"])
         faces = estimator.faces
+        keypoints = orient_body_keypoints(
+            outputs[0]["pred_keypoints_3d"],
+            outputs[0]["pred_vertices"],
+        )
+        landmark_names = (
+            "left-hip",
+            "right-hip",
+            "left-knee",
+            "right-knee",
+            "left-ankle",
+            "right-ankle",
+            "nose",
+            "neck",
+        )
+        body_landmarks = {
+            name: keypoints[mhr_names.index(name)]
+            for name in landmark_names
+        }
 
         img_array = np.array(img)
         skin_color = estimate_skin_color(img_array)
@@ -161,7 +214,7 @@ async def generate_3d(image: UploadFile = File(...)):
 
         mesh = trimesh.Trimesh(vertices=vertices, faces=faces, process=False)
         mesh.visual.vertex_colors = vertex_colors
-        avatar_id = _remember_avatar(vertices, faces)
+        avatar_id = _remember_avatar(vertices, faces, body_landmarks)
 
         output_dir = tempfile.mkdtemp(prefix="sam3d-body-")
         output_path = os.path.join(output_dir, "avatar_output.glb")
@@ -217,10 +270,17 @@ async def generate_garment(
             )
 
         with _avatar_cache_lock:
-            body_mesh = _avatar_cache.get(avatar_id)
-            if body_mesh is not None:
-                body_mesh = body_mesh.copy()
-        if body_mesh is None:
+            cached_avatar = _avatar_cache.get(avatar_id)
+            if cached_avatar is not None:
+                body_mesh = cached_avatar[0].copy()
+                body_landmarks = {
+                    name: point.copy()
+                    for name, point in cached_avatar[1].items()
+                }
+            else:
+                body_mesh = None
+                body_landmarks = None
+        if body_mesh is None or body_landmarks is None:
             raise HTTPException(
                 status_code=404,
                 detail=(
@@ -235,6 +295,7 @@ async def generate_garment(
             garment_mesh.filename or "",
             body_mesh,
             garment_type,
+            body_landmarks=body_landmarks,
         )
         simulated_glb, _, penetration_pairs = await run_in_threadpool(
             simulate_static_garment,

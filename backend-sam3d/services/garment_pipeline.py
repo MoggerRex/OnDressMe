@@ -11,6 +11,7 @@ import trimesh
 MAX_GARMENT_MESH_BYTES = 64 * 1024 * 1024
 MAX_GARMENT_VERTICES = 500_000
 SUPPORTED_GARMENT_TYPES = {"tshirt", "pants"}
+PANTS_WAIST_CLEARANCE_FACTOR = 1.02
 
 
 class GarmentPipelineError(ValueError):
@@ -22,6 +23,40 @@ class GarmentBuildResult:
     scene: trimesh.Scene
     metrics: dict[str, int | float | str]
     warnings: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class PantsBodyProfile:
+    target_width: float
+    target_height: float
+    center_x: float
+    center_y: float
+    center_z: float
+    body_min_y: float
+    body_height: float
+    target_depth: float
+    low_fraction: float
+    waist_fraction: float
+    centerline_fractions: np.ndarray
+    centerline_x: np.ndarray
+    centerline_z: np.ndarray
+    section_widths: np.ndarray
+    section_depths: np.ndarray
+    leg_centers: np.ndarray | None
+    waist_width: float
+    waist_depth: float
+    landmark_anchored: bool
+    front_direction: np.ndarray | None
+    waist_center_xz: np.ndarray
+    waist_contour_radii: np.ndarray
+    waist_contour_clearance: float
+    anterior_surface_distance: float
+    posterior_rise: float
+    posterior_anchor_center_xz: np.ndarray | None
+    posterior_anchor_xz: np.ndarray | None
+    posterior_surface_distance: float
+    posterior_clearance: float
+    posterior_anchor_y: float
 
 
 def _smooth_section_values(values: np.ndarray) -> np.ndarray:
@@ -110,6 +145,231 @@ def _bilateral_section_centers(
         )
 
     return centers
+
+
+def _landmark_leg_centers(
+    landmarks: dict[str, np.ndarray],
+    fractions: np.ndarray,
+    body_min_y: float,
+    body_height: float,
+) -> np.ndarray:
+    centers = np.empty((len(fractions), 2, 2), dtype=np.float64)
+    sides = (
+        ("left-hip", "left-knee", "left-ankle"),
+        ("right-hip", "right-knee", "right-ankle"),
+    )
+    if landmarks[sides[0][0]][0] > landmarks[sides[1][0]][0]:
+        sides = (sides[1], sides[0])
+
+    sample_y = body_min_y + fractions * body_height
+    for side_index, (hip_name, knee_name, ankle_name) in enumerate(sides):
+        points = np.asarray(
+            [landmarks[ankle_name], landmarks[knee_name], landmarks[hip_name]],
+            dtype=np.float64,
+        )
+        order = np.argsort(points[:, 1])
+        points = points[order]
+        unique_y, inverse = np.unique(points[:, 1], return_inverse=True)
+        if len(unique_y) < 2:
+            raise GarmentPipelineError(
+                "Las anclas MHR no permiten seguir una pierna en la malla corporal."
+            )
+        x_values = np.bincount(inverse, weights=points[:, 0]) / np.bincount(inverse)
+        z_values = np.bincount(inverse, weights=points[:, 2]) / np.bincount(inverse)
+        centers[:, side_index, 0] = np.interp(sample_y, unique_y, x_values)
+        centers[:, side_index, 1] = np.interp(sample_y, unique_y, z_values)
+
+    return centers
+
+
+def _apply_posterior_waist_anchor(
+    vertices: np.ndarray,
+    front_direction: np.ndarray,
+    anchor_center_xz: np.ndarray,
+    posterior_surface_distance: float,
+    clearance: float,
+    anchor_y: float,
+    body_depth: float,
+    target_y_low: float,
+    target_height: float,
+) -> np.ndarray:
+    if target_height <= 0:
+        return vertices
+
+    rear_direction = -front_direction
+    relative_xz = vertices[:, [0, 2]] - anchor_center_xz
+    posterior_distance = relative_xz @ rear_direction
+    posterior_weight = np.clip(
+        (posterior_distance - body_depth * 0.05) / max(body_depth * 0.20, 1e-6),
+        0.0,
+        1.0,
+    )
+    posterior_weight = posterior_weight**2 * (3.0 - 2.0 * posterior_weight)
+
+    height_fraction = np.clip(
+        (vertices[:, 1] - target_y_low) / target_height,
+        0.0,
+        1.0,
+    )
+    waistband_weight = np.clip((height_fraction - 0.65) / 0.35, 0.0, 1.0)
+    waistband_weight = waistband_weight**2 * (3.0 - 2.0 * waistband_weight)
+    required_distance = posterior_surface_distance + clearance
+    posterior_offset = np.maximum(required_distance - posterior_distance, 0.0)
+    posterior_offset = (
+        np.minimum(posterior_offset, body_depth * 0.5)
+        * posterior_weight
+        * waistband_weight
+    )
+    vertices[:, 0] += rear_direction[0] * posterior_offset
+    vertices[:, 2] += rear_direction[1] * posterior_offset
+    vertical_offset = np.maximum(anchor_y - vertices[:, 1], 0.0)
+    vertices[:, 1] += vertical_offset * posterior_weight * waistband_weight
+    return vertices
+
+
+def _apply_anterior_waist_clamp(
+    vertices: np.ndarray,
+    front_direction: np.ndarray,
+    waist_center_xz: np.ndarray,
+    anterior_surface_distance: float,
+    clearance: float,
+    target_y_low: float,
+    target_height: float,
+) -> np.ndarray:
+    if target_height <= 0:
+        return vertices
+
+    relative_xz = vertices[:, [0, 2]] - waist_center_xz
+    anterior_distance = relative_xz @ front_direction
+    height_fraction = np.clip(
+        (vertices[:, 1] - target_y_low) / target_height,
+        0.0,
+        1.0,
+    )
+    waistband_weight = np.clip((height_fraction - 0.72) / 0.28, 0.0, 1.0)
+    waistband_weight = waistband_weight**2 * (3.0 - 2.0 * waistband_weight)
+    excess = np.maximum(
+        anterior_distance - (anterior_surface_distance + clearance),
+        0.0,
+    )
+    inward_offset = excess * waistband_weight
+    vertices[:, 0] -= front_direction[0] * inward_offset
+    vertices[:, 2] -= front_direction[1] * inward_offset
+    return vertices
+
+
+def _body_radial_profile(
+    samples: np.ndarray,
+    center_xz: np.ndarray,
+    bin_count: int = 48,
+) -> np.ndarray:
+    offsets = samples[:, [0, 2]] - center_xz
+    radii = np.linalg.norm(offsets, axis=1)
+    angles = np.arctan2(offsets[:, 1], offsets[:, 0])
+    bins = np.floor((angles + np.pi) * bin_count / (2.0 * np.pi)).astype(int)
+    bins %= bin_count
+
+    profile = np.full(bin_count, np.nan, dtype=np.float64)
+    for bin_index in range(bin_count):
+        bin_radii = radii[bins == bin_index]
+        if len(bin_radii):
+            profile[bin_index] = float(np.quantile(bin_radii, 0.95))
+
+    populated = np.flatnonzero(np.isfinite(profile))
+    if len(populated) < 6:
+        raise GarmentPipelineError(
+            "La malla corporal no tiene suficiente resolución para ajustar toda la cintura."
+        )
+    extended_indices = np.concatenate(
+        (populated[-1:] - bin_count, populated, populated[:1] + bin_count)
+    )
+    extended_radii = profile[np.concatenate((populated[-1:], populated, populated[:1]))]
+    profile = np.interp(np.arange(bin_count), extended_indices, extended_radii)
+    return (
+        np.roll(profile, 2)
+        + 2.0 * np.roll(profile, 1)
+        + 3.0 * profile
+        + 2.0 * np.roll(profile, -1)
+        + np.roll(profile, -2)
+    ) / 9.0
+
+
+def _sample_radial_profile(angles: np.ndarray, profile: np.ndarray) -> np.ndarray:
+    bin_count = len(profile)
+    angle_step = 2.0 * np.pi / bin_count
+    profile_angles = -np.pi + (np.arange(bin_count) + 0.5) * angle_step
+    sample_angles = (angles + np.pi) % (2.0 * np.pi) - np.pi
+    extended_angles = np.concatenate(
+        ([profile_angles[-1] - 2.0 * np.pi], profile_angles, [profile_angles[0] + 2.0 * np.pi])
+    )
+    extended_profile = np.concatenate(([profile[-1]], profile, [profile[0]]))
+    return np.interp(sample_angles, extended_angles, extended_profile)
+
+
+def _apply_waist_contour_clamp(
+    vertices: np.ndarray,
+    waist_center_xz: np.ndarray,
+    waist_contour_radii: np.ndarray,
+    clearance: float,
+    target_y_low: float,
+    target_height: float,
+) -> np.ndarray:
+    if target_height <= 0:
+        return vertices
+
+    relative_xz = vertices[:, [0, 2]] - waist_center_xz
+    radii = np.linalg.norm(relative_xz, axis=1)
+    angles = np.arctan2(relative_xz[:, 1], relative_xz[:, 0])
+    body_radii = _sample_radial_profile(angles, waist_contour_radii)
+    max_radii = body_radii + clearance
+    height_fraction = np.clip(
+        (vertices[:, 1] - target_y_low) / target_height,
+        0.0,
+        1.0,
+    )
+    waistband_weight = np.clip((height_fraction - 0.72) / 0.28, 0.0, 1.0)
+    waistband_weight = waistband_weight**2 * (3.0 - 2.0 * waistband_weight)
+    adjusted_radii = radii - np.maximum(radii - max_radii, 0.0) * waistband_weight
+    radial_scale = np.divide(
+        adjusted_radii,
+        radii,
+        out=np.ones_like(adjusted_radii),
+        where=radii > 1e-8,
+    )
+    vertices[:, 0] = waist_center_xz[0] + relative_xz[:, 0] * radial_scale
+    vertices[:, 2] = waist_center_xz[1] + relative_xz[:, 1] * radial_scale
+    return vertices
+
+
+def _body_section_dimensions(
+    vertices: np.ndarray,
+    normalized_y: np.ndarray,
+    fractions: np.ndarray,
+    center_x: float,
+    central_radius: float,
+) -> tuple[np.ndarray, np.ndarray]:
+    widths = []
+    depths = []
+    for fraction in fractions:
+        band = np.abs(normalized_y - fraction) <= 0.035
+        samples = vertices[
+            band & (np.abs(vertices[:, 0] - center_x) <= central_radius)
+        ]
+        if len(samples) < 8:
+            samples = vertices[band]
+        if len(samples) < 8:
+            raise GarmentPipelineError(
+                "La resolución de la malla no permite medir la cintura y las piernas."
+            )
+        x_low, x_high = np.quantile(samples[:, 0], [0.05, 0.95])
+        z_low, z_high = np.quantile(samples[:, 2], [0.05, 0.95])
+        widths.append(float(x_high - x_low))
+        depths.append(float(z_high - z_low))
+
+    return (
+        _smooth_section_values(np.asarray(widths, dtype=np.float64)),
+        _smooth_section_values(np.asarray(depths, dtype=np.float64)),
+    )
 
 
 def _validate_body_mesh(body_mesh: trimesh.Trimesh) -> np.ndarray:
@@ -230,22 +490,8 @@ def _body_torso_profile(
 
 def _body_pants_profile(
     vertices: np.ndarray,
-) -> tuple[
-    float,
-    float,
-    float,
-    float,
-    float,
-    float,
-    float,
-    float,
-    float,
-    float,
-    np.ndarray,
-    np.ndarray,
-    np.ndarray,
-    np.ndarray | None,
-]:
+    landmarks: dict[str, np.ndarray] | None = None,
+) -> PantsBodyProfile:
     bounds = np.vstack((vertices.min(axis=0), vertices.max(axis=0)))
     body_height = float(bounds[1, 1] - bounds[0, 1])
     if body_height <= 0 or body_height < 0.55 * max(
@@ -260,11 +506,62 @@ def _body_pants_profile(
     body_width = float(bounds[1, 0] - bounds[0, 0])
     normalized_y = (vertices[:, 1] - bounds[0, 1]) / body_height
     central_limit = max(body_width * 0.20, body_height * 0.14)
+    landmark_anchored = landmarks is not None
+    front_direction = None
+    posterior_rise = 0.0
+    hip_fraction = 0.54
+    if landmarks is not None:
+        required_landmarks = (
+            "left-hip",
+            "right-hip",
+            "left-knee",
+            "right-knee",
+            "left-ankle",
+            "right-ankle",
+            "nose",
+            "neck",
+        )
+        for name in required_landmarks:
+            landmark = landmarks.get(name)
+            if landmark is None:
+                raise GarmentPipelineError(
+                    f"Falta el ancla MHR '{name}' para ajustar el pantalón."
+                )
+            point = np.asarray(landmark, dtype=np.float64)
+            if point.shape != (3,) or not np.isfinite(point).all():
+                raise GarmentPipelineError(
+                    f"La ancla MHR '{name}' no contiene coordenadas 3D válidas."
+                )
+        hips = np.asarray(
+            [landmarks["left-hip"], landmarks["right-hip"]],
+            dtype=np.float64,
+        )
+        hip_fraction = float(
+            (np.mean(hips[:, 1]) - bounds[0, 1]) / body_height
+        )
+        center_x = float(np.mean(hips[:, 0]))
+        front_direction = (
+            np.asarray(landmarks["nose"], dtype=np.float64)[[0, 2]]
+            - np.asarray(landmarks["neck"], dtype=np.float64)[[0, 2]]
+        )
+        front_length = float(np.linalg.norm(front_direction))
+        if front_length <= body_height * 1e-4:
+            raise GarmentPipelineError(
+                "Las anclas MHR no permiten determinar la orientación frontal del cuerpo."
+            )
+        front_direction /= front_length
+        posterior_rise = body_height * 0.055
+
     hip_widths = []
     hip_depths = []
     hip_centers_x = []
     hip_centers_z = []
-    for fraction in (0.52, 0.54, 0.56):
+    hip_sample_fractions = (
+        np.clip(hip_fraction + np.array([-0.02, 0.0, 0.02]), 0.02, 0.64)
+        if landmarks is not None
+        else (0.52, 0.54, 0.56)
+    )
+    for fraction in hip_sample_fractions:
         band = np.abs(normalized_y - fraction) <= 0.02
         samples = vertices[band & (np.abs(vertices[:, 0] - center_x) <= central_limit)]
         if len(samples) < 8:
@@ -284,35 +581,183 @@ def _body_pants_profile(
         )
 
     low_fraction = 0.02
-    high_fraction = 0.57
-    centerline_fractions = np.linspace(low_fraction, high_fraction, 18)
+    profile_fractions = np.linspace(low_fraction, 0.60, 30)
+    if landmarks is not None:
+        profile_fractions = np.linspace(low_fraction, 0.64, 32)
+    section_widths, section_depths = _body_section_dimensions(
+        vertices,
+        normalized_y,
+        profile_fractions,
+        center_x,
+        central_limit,
+    )
+    waist_candidates = np.flatnonzero(
+        (profile_fractions >= 0.48)
+        & (profile_fractions <= (0.64 if landmarks is not None else 0.60))
+    )
+    if landmarks is None:
+        waist_index = int(
+            waist_candidates[
+                np.argmin(
+                    section_widths[waist_candidates]
+                    * section_depths[waist_candidates]
+                )
+            ]
+        )
+    else:
+        target_waist_fraction = float(np.clip(hip_fraction + 0.075, 0.48, 0.64))
+        waist_index = int(
+            waist_candidates[
+                np.argmin(
+                    np.abs(profile_fractions[waist_candidates] - target_waist_fraction)
+                )
+            ]
+        )
+    waist_fraction = float(profile_fractions[waist_index])
+    waist_width = float(section_widths[waist_index])
+    waist_depth = float(section_depths[waist_index])
+    centerline_fractions = np.linspace(low_fraction, waist_fraction, 24)
     centerline_x, centerline_z = _body_section_centers(
         vertices,
         centerline_fractions,
         float(bounds[0, 1]),
         body_height,
-    )
-    leg_centers = _bilateral_section_centers(
-        vertices,
-        normalized_y,
-        centerline_fractions,
         center_x,
+        central_limit,
     )
-    return (
-        max(hip_widths) * 1.22,
-        body_height * (high_fraction - low_fraction),
-        float(np.median(hip_centers_x)),
-        float(bounds[0, 1] + body_height * (low_fraction + high_fraction) * 0.5),
-        float(np.median(hip_centers_z)),
-        float(bounds[0, 1]),
-        body_height,
-        max(hip_depths) * 1.35,
-        low_fraction,
-        high_fraction,
-        centerline_fractions,
-        centerline_x,
-        centerline_z,
-        leg_centers,
+    waist_band = (
+        (np.abs(normalized_y - waist_fraction) <= 0.035)
+        & (np.abs(vertices[:, 0] - center_x) <= central_limit)
+    )
+    waist_samples = vertices[waist_band]
+    if len(waist_samples) < 8:
+        waist_samples = vertices[np.abs(normalized_y - waist_fraction) <= 0.035]
+    if len(waist_samples) < 8:
+        raise GarmentPipelineError(
+            "La malla corporal no tiene suficientes puntos en la cintura para ajustar el pantalón."
+        )
+    waist_center_xz = np.array(
+        [
+            float(np.mean(np.quantile(waist_samples[:, 0], [0.1, 0.9]))),
+            float(np.mean(np.quantile(waist_samples[:, 2], [0.1, 0.9]))),
+        ],
+        dtype=np.float64,
+    )
+    waist_contour_radii = _body_radial_profile(waist_samples, waist_center_xz)
+    waist_contour_clearance = max(body_height * 0.006, 0.004)
+    anterior_surface_distance = 0.0
+    if front_direction is not None:
+        anterior_distances = (
+            waist_samples[:, [0, 2]] - waist_center_xz
+        ) @ front_direction
+        anterior_surface_distance = float(np.quantile(anterior_distances, 0.95))
+
+    posterior_anchor_center_xz = None
+    posterior_anchor_xz = None
+    posterior_surface_distance = 0.0
+    posterior_clearance = max(body_height * 0.012, 0.006)
+    posterior_anchor_y = 0.0
+    if front_direction is not None:
+        posterior_anchor_fraction = min(
+            waist_fraction + posterior_rise / body_height,
+            0.70,
+        )
+        anchor_band = (
+            (np.abs(normalized_y - posterior_anchor_fraction) <= 0.035)
+            & (np.abs(vertices[:, 0] - center_x) <= central_limit)
+        )
+        anchor_samples = vertices[anchor_band]
+        if len(anchor_samples) < 8:
+            anchor_samples = vertices[
+                np.abs(normalized_y - posterior_anchor_fraction) <= 0.035
+            ]
+        if len(anchor_samples) < 8:
+            raise GarmentPipelineError(
+                "La malla corporal no tiene suficientes puntos en la cintura posterior para crear un anclaje seguro."
+            )
+
+        anchor_center_x = float(
+            np.mean(np.quantile(anchor_samples[:, 0], [0.1, 0.9]))
+        )
+        anchor_center_z = float(
+            np.mean(np.quantile(anchor_samples[:, 2], [0.1, 0.9]))
+        )
+        posterior_anchor_center_xz = np.array(
+            [anchor_center_x, anchor_center_z], dtype=np.float64
+        )
+        rear_direction = -front_direction
+        posterior_distances = (
+            anchor_samples[:, [0, 2]] - posterior_anchor_center_xz
+        ) @ rear_direction
+        posterior_surface_distance = float(np.quantile(posterior_distances, 0.95))
+        posterior_anchor_xz = posterior_anchor_center_xz + rear_direction * (
+            posterior_surface_distance + posterior_clearance
+        )
+        posterior_anchor_y = float(
+            bounds[0, 1] + body_height * posterior_anchor_fraction
+        )
+        waist_y = float(bounds[0, 1] + body_height * waist_fraction)
+        posterior_rise = max(posterior_anchor_y - waist_y, 0.0)
+
+    if landmarks is not None:
+        hip_centers_x = [float(np.mean(hips[:, 0]))]
+        leg_centers = _landmark_leg_centers(
+            landmarks,
+            centerline_fractions,
+            float(bounds[0, 1]),
+            body_height,
+        )
+        surface_leg_centers = _bilateral_section_centers(
+            vertices,
+            normalized_y,
+            centerline_fractions,
+            center_x,
+        )
+        if surface_leg_centers is not None:
+            leg_centers[:, :, 1] = surface_leg_centers[:, :, 1]
+        else:
+            leg_centers[:, :, 1] = centerline_z[:, np.newaxis]
+    else:
+        leg_centers = _bilateral_section_centers(
+            vertices,
+            normalized_y,
+            centerline_fractions,
+            center_x,
+        )
+    return PantsBodyProfile(
+        target_width=max(hip_widths) * 1.12,
+        target_height=body_height * (waist_fraction - low_fraction),
+        center_x=float(np.median(hip_centers_x)),
+        center_y=float(
+            bounds[0, 1]
+            + body_height * (low_fraction + waist_fraction) * 0.5
+        ),
+        center_z=float(np.median(hip_centers_z)),
+        body_min_y=float(bounds[0, 1]),
+        body_height=body_height,
+        target_depth=max(hip_depths) * 1.12,
+        low_fraction=low_fraction,
+        waist_fraction=waist_fraction,
+        centerline_fractions=centerline_fractions,
+        centerline_x=centerline_x,
+        centerline_z=centerline_z,
+        section_widths=section_widths,
+        section_depths=section_depths,
+        leg_centers=leg_centers,
+        waist_width=waist_width,
+        waist_depth=waist_depth,
+        landmark_anchored=landmark_anchored,
+        front_direction=front_direction,
+        waist_center_xz=waist_center_xz,
+        waist_contour_radii=waist_contour_radii,
+        waist_contour_clearance=waist_contour_clearance,
+        anterior_surface_distance=anterior_surface_distance,
+        posterior_rise=posterior_rise,
+        posterior_anchor_center_xz=posterior_anchor_center_xz,
+        posterior_anchor_xz=posterior_anchor_xz,
+        posterior_surface_distance=posterior_surface_distance,
+        posterior_clearance=posterior_clearance,
+        posterior_anchor_y=posterior_anchor_y,
     )
 
 
@@ -321,6 +766,7 @@ def load_garment_mesh(
     filename: str,
     body_mesh: trimesh.Trimesh,
     garment_type: str = "tshirt",
+    body_landmarks: dict[str, np.ndarray] | None = None,
 ) -> GarmentBuildResult:
     garment_type = garment_type.strip().lower()
     if garment_type not in SUPPORTED_GARMENT_TYPES:
@@ -404,23 +850,23 @@ def load_garment_mesh(
 
     body_vertices = _validate_body_mesh(body_mesh)
     leg_centers = None
+    pants_profile = None
     if garment_type == "pants":
-        (
-            target_width,
-            target_height,
-            center_x,
-            center_y,
-            center_z,
-            body_min_y,
-            body_height,
-            target_depth,
-            target_fraction_low,
-            target_fraction_high,
-            centerline_fractions,
-            centerline_x,
-            centerline_z,
-            leg_centers,
-        ) = _body_pants_profile(body_vertices)
+        pants_profile = _body_pants_profile(body_vertices, body_landmarks)
+        target_width = pants_profile.target_width
+        target_height = pants_profile.target_height
+        center_x = pants_profile.center_x
+        center_y = pants_profile.center_y
+        center_z = pants_profile.center_z
+        body_min_y = pants_profile.body_min_y
+        body_height = pants_profile.body_height
+        target_depth = pants_profile.target_depth
+        target_fraction_low = pants_profile.low_fraction
+        target_fraction_high = pants_profile.waist_fraction
+        centerline_fractions = pants_profile.centerline_fractions
+        centerline_x = pants_profile.centerline_x
+        centerline_z = pants_profile.centerline_z
+        leg_centers = pants_profile.leg_centers
     else:
         (
             target_width,
@@ -453,7 +899,20 @@ def load_garment_mesh(
     source_center = garment_bounds.mean(axis=0)
     target_center = np.array([center_x, center_y, center_z], dtype=np.float64)
     transform = np.eye(4, dtype=np.float64)
-    transform[:3, :3] = np.diag([scale_x, scale_y, scale_z])
+    garment_rotation = np.eye(3, dtype=np.float64)
+    if pants_profile is not None and pants_profile.front_direction is not None:
+        front_x, front_z = pants_profile.front_direction
+        garment_rotation = np.array(
+            [
+                [front_z, 0.0, front_x],
+                [0.0, 1.0, 0.0],
+                [-front_x, 0.0, front_z],
+            ],
+            dtype=np.float64,
+        )
+    transform[:3, :3] = garment_rotation @ np.diag(
+        [scale_x, scale_y, scale_z]
+    )
     transform[:3, 3] = target_center - transform[:3, :3] @ source_center
     scene.apply_transform(transform)
 
@@ -463,28 +922,28 @@ def load_garment_mesh(
     reference_x = float(np.interp(center_y, centerline_y, centerline_x))
     reference_z = float(np.interp(center_y, centerline_y, centerline_z))
     garment_leg_centers = None
-    if leg_centers is not None:
-        garment_world_vertices = []
-        for node in scene.graph.nodes_geometry:
-            node_transform, geometry_name = scene.graph[node]
-            geometry = scene.geometry[geometry_name]
-            garment_world_vertices.append(
-                trimesh.transform_points(
-                    np.asarray(geometry.vertices, dtype=np.float64),
-                    node_transform,
-                )
+    garment_world_vertices = []
+    for node in scene.graph.nodes_geometry:
+        node_transform, geometry_name = scene.graph[node]
+        geometry = scene.geometry[geometry_name]
+        garment_world_vertices.append(
+            trimesh.transform_points(
+                np.asarray(geometry.vertices, dtype=np.float64),
+                node_transform,
             )
-        all_garment_vertices = np.concatenate(garment_world_vertices, axis=0)
-        garment_height_fraction = np.clip(
-            (all_garment_vertices[:, 1] - target_y_low) / target_height,
-            0.0,
-            1.0,
         )
-        garment_body_fractions = (
-            target_fraction_low
-            + garment_height_fraction
-            * (target_fraction_high - target_fraction_low)
-        )
+    all_garment_vertices = np.concatenate(garment_world_vertices, axis=0)
+    all_garment_height_fraction = np.clip(
+        (all_garment_vertices[:, 1] - target_y_low) / target_height,
+        0.0,
+        1.0,
+    )
+    garment_body_fractions = (
+        target_fraction_low
+        + all_garment_height_fraction
+        * (target_fraction_high - target_fraction_low)
+    )
+    if leg_centers is not None:
         garment_leg_centers = _bilateral_section_centers(
             all_garment_vertices,
             garment_body_fractions,
@@ -492,9 +951,10 @@ def load_garment_mesh(
             center_x,
         )
 
-    for node in scene.graph.nodes_geometry:
+    fitted_world_vertices = []
+    scene_nodes = list(scene.graph.nodes_geometry)
+    for node in scene_nodes:
         node_transform, geometry_name = scene.graph[node]
-        inverse_transform = np.linalg.inv(node_transform)
         geometry = scene.geometry[geometry_name]
         world_vertices = trimesh.transform_points(
             np.asarray(geometry.vertices, dtype=np.float64),
@@ -568,7 +1028,165 @@ def load_garment_mesh(
             )
             world_vertices[:, 0] += leg_blend * leg_offset_x
             world_vertices[:, 2] += leg_blend * leg_offset_z
-        geometry.vertices = trimesh.transform_points(
+        fitted_world_vertices.append(world_vertices)
+
+    waist_scale_limited = False
+    if pants_profile is not None:
+        fitted_vertices = np.concatenate(fitted_world_vertices, axis=0)
+        fitted_height_fraction = np.clip(
+            (fitted_vertices[:, 1] - target_y_low) / target_height,
+            0.0,
+            1.0,
+        )
+        pants_fit_fractions = np.linspace(0.56, 1.0, 18)
+        pants_fit_scale_x = []
+        pants_fit_scale_z = []
+        body_profile_fractions = np.linspace(
+            pants_profile.low_fraction,
+            pants_profile.waist_fraction,
+            len(pants_profile.section_widths),
+        )
+        for fit_fraction in pants_fit_fractions:
+            section_vertices = np.empty((0, 3), dtype=np.float64)
+            for half_width in (0.04, 0.08, 0.12, 0.18, 0.25):
+                section = np.abs(fitted_height_fraction - fit_fraction) <= half_width
+                section_vertices = fitted_vertices[section]
+                if len(section_vertices) >= 8:
+                    break
+            if len(section_vertices) < 8:
+                nearest = np.argsort(
+                    np.abs(fitted_height_fraction - fit_fraction)
+                )[:8]
+                section_vertices = fitted_vertices[nearest]
+            if len(section_vertices) < 8:
+                raise GarmentPipelineError(
+                    "La malla del pantalón no permite medir la cintura."
+                )
+            x_low, x_high = np.quantile(section_vertices[:, 0], [0.05, 0.95])
+            z_low, z_high = np.quantile(section_vertices[:, 2], [0.05, 0.95])
+            source_width = float(x_high - x_low)
+            source_depth = float(z_high - z_low)
+            body_fraction = (
+                target_fraction_low
+                + fit_fraction * (target_fraction_high - target_fraction_low)
+            )
+            target_section_width = float(
+                np.interp(
+                    body_fraction,
+                    body_profile_fractions,
+                    pants_profile.section_widths,
+                )
+                * PANTS_WAIST_CLEARANCE_FACTOR
+            )
+            target_section_depth = float(
+                np.interp(
+                    body_fraction,
+                    body_profile_fractions,
+                    pants_profile.section_depths,
+                )
+                * PANTS_WAIST_CLEARANCE_FACTOR
+            )
+            if source_width <= 0 or source_depth <= 0:
+                raise GarmentPipelineError(
+                    "La malla del pantalón contiene secciones sin ancho o profundidad."
+                )
+            raw_scale_x = target_section_width / source_width
+            raw_scale_z = target_section_depth / source_depth
+            if not 0.5 <= raw_scale_x <= 2.5 or not 0.5 <= raw_scale_z <= 2.5:
+                waist_scale_limited = True
+            transition = np.clip((fit_fraction - 0.56) / 0.12, 0.0, 1.0)
+            transition = transition * transition * (3.0 - 2.0 * transition)
+            pants_fit_scale_x.append(
+                1.0 + transition * (np.clip(raw_scale_x, 0.5, 2.5) - 1.0)
+            )
+            pants_fit_scale_z.append(
+                1.0 + transition * (np.clip(raw_scale_z, 0.5, 2.5) - 1.0)
+            )
+
+        pants_fit_scale_x = _smooth_section_values(
+            np.asarray(pants_fit_scale_x, dtype=np.float64)
+        )
+        pants_fit_scale_z = _smooth_section_values(
+            np.asarray(pants_fit_scale_z, dtype=np.float64)
+        )
+        for index, world_vertices in enumerate(fitted_world_vertices):
+            garment_height_fraction = np.clip(
+                (world_vertices[:, 1] - target_y_low) / target_height,
+                0.0,
+                1.0,
+            )
+            body_fractions = (
+                target_fraction_low
+                + garment_height_fraction
+                * (target_fraction_high - target_fraction_low)
+            )
+            target_x = np.interp(
+                body_fractions, centerline_fractions, centerline_x
+            )
+            target_z = np.interp(
+                body_fractions, centerline_fractions, centerline_z
+            )
+            width_scale = np.interp(
+                garment_height_fraction,
+                pants_fit_fractions,
+                pants_fit_scale_x,
+                left=1.0,
+            )
+            depth_scale = np.interp(
+                garment_height_fraction,
+                pants_fit_fractions,
+                pants_fit_scale_z,
+                left=1.0,
+            )
+            world_vertices[:, 0] = target_x + (
+                world_vertices[:, 0] - target_x
+            ) * width_scale
+            world_vertices[:, 2] = target_z + (
+                world_vertices[:, 2] - target_z
+            ) * depth_scale
+            if (
+                pants_profile.front_direction is not None
+                and pants_profile.posterior_anchor_center_xz is not None
+                and pants_profile.posterior_anchor_xz is not None
+            ):
+                world_vertices = _apply_posterior_waist_anchor(
+                    world_vertices,
+                    pants_profile.front_direction,
+                    pants_profile.posterior_anchor_center_xz,
+                    pants_profile.posterior_surface_distance,
+                    pants_profile.posterior_clearance,
+                    pants_profile.posterior_anchor_y,
+                    pants_profile.waist_depth,
+                    target_y_low,
+                    target_height,
+                )
+            world_vertices = _apply_waist_contour_clamp(
+                world_vertices,
+                pants_profile.waist_center_xz,
+                pants_profile.waist_contour_radii,
+                pants_profile.waist_contour_clearance,
+                target_y_low,
+                target_height,
+            )
+            if (
+                pants_profile.front_direction is not None
+                and pants_profile.waist_center_xz is not None
+            ):
+                world_vertices = _apply_anterior_waist_clamp(
+                    world_vertices,
+                    pants_profile.front_direction,
+                    pants_profile.waist_center_xz,
+                    pants_profile.anterior_surface_distance,
+                    pants_profile.posterior_clearance,
+                    target_y_low,
+                    target_height,
+                )
+            fitted_world_vertices[index] = world_vertices
+
+    for node, world_vertices in zip(scene_nodes, fitted_world_vertices):
+        node_transform, geometry_name = scene.graph[node]
+        inverse_transform = np.linalg.inv(node_transform)
+        scene.geometry[geometry_name].vertices = trimesh.transform_points(
             world_vertices,
             inverse_transform,
         )
@@ -584,29 +1202,95 @@ def load_garment_mesh(
         warnings.append(
             "La malla corporal no permitió separar ambas piernas; se aplicó un centrado general por altura."
         )
+    if garment_type == "pants" and (
+        pants_profile is not None and not pants_profile.landmark_anchored
+    ):
+        warnings.append(
+            "El avatar no conservó anclas MHR; el pantalón se ajustó solo con secciones de la malla corporal."
+        )
+    if waist_scale_limited:
+        warnings.append(
+            "El ajuste de cintura alcanzó el límite de deformación permitido para conservar la estabilidad de la malla."
+        )
     if mesh_format == "obj":
         warnings.append(
             "Un OBJ cargado sin sus archivos MTL/texturas conserva la geometría, pero puede quedar sin textura; usa GLB para materiales embebidos."
         )
 
+    metrics: dict[str, int | float | str] = {
+        "geometry_source": "uploaded_garment_mesh",
+        "garment_type": garment_type,
+        "source_format": mesh_format,
+        "image_use": (
+            "embedded_or_mesh_materials" if mesh_format == "glb" else "none_or_external_obj"
+        ),
+        "body_height_units": round(body_height, 5),
+        "garment_vertex_count": vertex_count,
+        "garment_face_count": face_count,
+        "fit_scale_x": round(float(scale_x), 6),
+        "fit_scale_y": round(float(scale_y), 6),
+        "fit_scale_z": round(float(scale_z), 6),
+        "fit_torso_y_min": round(float(target_y_low), 5),
+        "fit_torso_y_max": round(float(target_y_high), 5),
+        "simulation": "pending",
+    }
+    if pants_profile is not None:
+        metrics.update(
+            {
+                "fit_anchor_source": (
+                    "mhr70_keypoints"
+                    if pants_profile.landmark_anchored
+                    else "body_mesh_sections"
+                ),
+                "fit_waist_fraction": round(pants_profile.waist_fraction, 5),
+                "fit_waist_y": round(float(target_y_high), 5),
+                "fit_waist_section_width": round(
+                    pants_profile.waist_width * PANTS_WAIST_CLEARANCE_FACTOR, 5
+                ),
+                "fit_waist_section_depth": round(
+                    pants_profile.waist_depth * PANTS_WAIST_CLEARANCE_FACTOR, 5
+                ),
+                "fit_posterior_rise_units": round(
+                    pants_profile.posterior_rise, 5
+                ),
+                "fit_posterior_offset_units": round(
+                    pants_profile.posterior_surface_distance
+                    + pants_profile.posterior_clearance
+                    if pants_profile.posterior_anchor_xz is not None
+                    else 0.0,
+                    5,
+                ),
+                "fit_anterior_surface_distance_units": round(
+                    pants_profile.anterior_surface_distance, 5
+                ),
+                "fit_anterior_clearance_units": round(
+                    pants_profile.posterior_clearance, 5
+                ),
+                "fit_waist_contour_clearance_units": round(
+                    pants_profile.waist_contour_clearance, 5
+                ),
+            }
+        )
+        if pants_profile.posterior_anchor_xz is not None:
+            metrics.update(
+                {
+                    "fit_posterior_anchor_x": round(
+                        float(pants_profile.posterior_anchor_xz[0]), 5
+                    ),
+                    "fit_posterior_anchor_y": round(
+                        pants_profile.posterior_anchor_y, 5
+                    ),
+                    "fit_posterior_anchor_z": round(
+                        float(pants_profile.posterior_anchor_xz[1]), 5
+                    ),
+                    "fit_posterior_clearance_units": round(
+                        pants_profile.posterior_clearance, 5
+                    ),
+                }
+            )
+
     return GarmentBuildResult(
         scene=scene,
-        metrics={
-            "geometry_source": "uploaded_garment_mesh",
-            "garment_type": garment_type,
-            "source_format": mesh_format,
-            "image_use": (
-                "embedded_or_mesh_materials" if mesh_format == "glb" else "none_or_external_obj"
-            ),
-            "body_height_units": round(body_height, 5),
-            "garment_vertex_count": vertex_count,
-            "garment_face_count": face_count,
-            "fit_scale_x": round(float(scale_x), 6),
-            "fit_scale_y": round(float(scale_y), 6),
-            "fit_scale_z": round(float(scale_z), 6),
-            "fit_torso_y_min": round(float(target_y_low), 5),
-            "fit_torso_y_max": round(float(target_y_high), 5),
-            "simulation": "pending",
-        },
+        metrics=metrics,
         warnings=tuple(warnings),
     )

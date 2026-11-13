@@ -60,6 +60,36 @@ class BlenderSimulationTests(unittest.TestCase):
             )
         )
 
+    def test_pants_simulation_pins_the_waistband_anchor(self):
+        body = trimesh.creation.icosphere(subdivisions=3)
+        body.apply_scale([0.3, 1.0, 0.18])
+        body.apply_translation([0.0, 1.0, 0.0])
+        pants_mesh = trimesh.creation.box(extents=[0.55, 0.65, 0.25])
+        for _ in range(3):
+            vertices, faces = trimesh.remesh.subdivide(
+                pants_mesh.vertices,
+                pants_mesh.faces,
+            )
+            pants_mesh = trimesh.Trimesh(
+                vertices=vertices,
+                faces=faces,
+                process=False,
+            )
+        pants_bytes = pants_mesh.export(file_type="glb")
+        garment = load_garment_mesh(pants_bytes, "pants.glb", body, "pants")
+
+        glb, log, _ = simulate_static_garment(
+            body,
+            garment.scene,
+            garment_type="pants",
+        )
+
+        self.assertEqual(glb[:4], b"glTF")
+        self.assertRegex(log, r"ANCHOR_PIN_VERTICES\[.+\]=[1-9]\d*")
+        self.assertRegex(log, r"PELVIS_TIGHTENED_VERTICES\[.+\]=[1-9]\d*")
+        self.assertRegex(log, r"WAIST_TIGHTENED_VERTICES\[.+\]=[1-9]\d*")
+        self.assertIn("STATIC_GARMENT_EXPORTED=", log)
+
 
 class BlenderTimeoutTests(unittest.TestCase):
     def test_blender_has_no_timeout_by_default(self):

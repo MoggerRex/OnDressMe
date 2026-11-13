@@ -4,6 +4,7 @@ import sys
 
 import bpy
 import bmesh
+from mathutils import Vector
 from mathutils.bvhtree import BVHTree
 
 
@@ -27,8 +28,8 @@ SIMULATION_PROFILES = {
         "compression": 22.0,
         "shear": 10.0,
         "bending": 0.8,
-        "collision_distance": 0.006,
-        "pin_fraction": 0.16,
+        "collision_distance": 0.004,
+        "pin_fraction": 0.08,
     },
 }
 
@@ -131,7 +132,112 @@ def clear_garment_penetrations(body_trees, garment_objects, clearance):
         print(f"BODY_CLEARANCE_VERTICES[{obj.name}]={projected}")
 
 
-def add_top_edge_pins(obj, settings, pin_fraction):
+def fit_body_surface_clearance(
+    body_trees,
+    garment_objects,
+    body_min_height,
+    body_height,
+    clearance,
+    lower_fraction,
+    upper_fraction,
+    blend_width,
+    max_correction_fraction,
+    region_name,
+):
+    if body_height <= 0:
+        raise RuntimeError(
+            f"El cuerpo no tiene una altura válida para ajustar {region_name.lower()}."
+        )
+
+    max_correction = body_height * max_correction_fraction
+
+    for obj in garment_objects:
+        world_to_local = obj.matrix_world.inverted()
+        tightened = 0
+        for vertex in obj.data.vertices:
+            world_position = obj.matrix_world @ vertex.co
+            height_fraction = (
+                world_position.z - body_min_height
+            ) / body_height
+            if not lower_fraction < height_fraction < upper_fraction:
+                continue
+
+            nearest_candidates = [
+                tree.find_nearest(world_position) for tree in body_trees
+            ]
+            nearest_candidates = [
+                candidate for candidate in nearest_candidates if candidate is not None
+            ]
+            if not nearest_candidates:
+                raise RuntimeError(
+                    f"No se encontró una superficie corporal para ajustar {obj.name}."
+                )
+            nearest_position, normal, _, distance = min(
+                nearest_candidates,
+                key=lambda candidate: candidate[3],
+            )
+            if distance <= clearance or normal.length_squared < 1e-12:
+                continue
+
+            displacement = world_position - nearest_position
+            normal.normalize()
+            if displacement.dot(normal) <= 0:
+                continue
+
+            blend = min(
+                (height_fraction - lower_fraction) / blend_width,
+                (upper_fraction - height_fraction) / blend_width,
+                1.0,
+            )
+            blend = max(blend, 0.0)
+            blend = blend * blend * (3.0 - 2.0 * blend)
+            correction = min(distance - clearance, max_correction) * blend
+            if correction <= 1e-8:
+                continue
+
+            displacement.normalize()
+            corrected_position = world_position - displacement * correction
+            vertex.co = world_to_local @ corrected_position
+            tightened += 1
+
+        obj.data.update()
+        print(f"{region_name}_TIGHTENED_VERTICES[{obj.name}]={tightened}")
+
+
+def fit_pants_surface_regions(
+    body_trees,
+    garment_objects,
+    body_min_height,
+    body_height,
+    profile,
+):
+    fit_body_surface_clearance(
+        body_trees,
+        garment_objects,
+        body_min_height,
+        body_height,
+        max(profile["collision_distance"] * 2, body_height * 0.004),
+        0.30,
+        0.54,
+        0.06,
+        0.06,
+        "PELVIS",
+    )
+    fit_body_surface_clearance(
+        body_trees,
+        garment_objects,
+        body_min_height,
+        body_height,
+        max(profile["collision_distance"] * 1.5, body_height * 0.003),
+        0.50,
+        0.63,
+        0.035,
+        0.04,
+        "WAIST",
+    )
+
+
+def add_top_edge_pins(obj, settings, pin_fraction, group_name):
     world_vertices = [obj.matrix_world @ vertex.co for vertex in obj.data.vertices]
     max_height = max(vertex.z for vertex in world_vertices)
     min_height = min(vertex.z for vertex in world_vertices)
@@ -139,8 +245,9 @@ def add_top_edge_pins(obj, settings, pin_fraction):
     if garment_height <= 0:
         raise RuntimeError(f"La prenda {obj.name} no tiene altura válida.")
 
-    pin_group = obj.vertex_groups.new(name="ShoulderHold")
+    pin_group = obj.vertex_groups.new(name=group_name)
     pin_start = max_height - garment_height * pin_fraction
+    pinned_vertices = 0
     for index, vertex in enumerate(world_vertices):
         weight = min(
             max(
@@ -151,8 +258,10 @@ def add_top_edge_pins(obj, settings, pin_fraction):
         )
         if weight > 0:
             pin_group.add([index], weight, "REPLACE")
+            pinned_vertices += 1
     settings.vertex_group_mass = pin_group.name
     settings.pin_stiffness = 1.0
+    print(f"ANCHOR_PIN_VERTICES[{obj.name}]={pinned_vertices}")
 
 
 def count_surface_intersections(body_objects, garment_objects, depsgraph):
@@ -183,6 +292,16 @@ def main():
     body_trees = [BVHTree.FromObject(obj, depsgraph) for obj in body_objects]
     if not body_trees or any(tree is None for tree in body_trees):
         raise RuntimeError("No se pudo crear el acelerador geométrico del cuerpo.")
+    body_bounds = [
+        obj.matrix_world @ Vector(corner)
+        for obj in body_objects
+        for corner in obj.bound_box
+    ]
+    body_min_height = min(point.z for point in body_bounds)
+    body_max_height = max(point.z for point in body_bounds)
+    body_height = body_max_height - body_min_height
+    if body_height <= 0:
+        raise RuntimeError("No se pudo determinar la altura del cuerpo.")
 
     garment_objects = import_meshes(args.garment)
     if not garment_objects:
@@ -195,6 +314,14 @@ def main():
         garment_objects,
         profile["collision_distance"] * 3,
     )
+    if args.type == "pants":
+        fit_pants_surface_regions(
+            body_trees,
+            garment_objects,
+            body_min_height,
+            body_height,
+            profile,
+        )
     for obj in body_objects:
         simplify_collision_copy(obj)
         add_collision(obj, profile["collision_distance"])
@@ -215,7 +342,12 @@ def main():
         collision.collision_quality = 3
         collision.distance_min = profile["collision_distance"]
         collision.self_distance_min = profile["collision_distance"]
-        add_top_edge_pins(obj, settings, profile["pin_fraction"])
+        add_top_edge_pins(
+            obj,
+            settings,
+            profile["pin_fraction"],
+            "WaistbandAnchor" if args.type == "pants" else "ShoulderHold",
+        )
 
     scene = bpy.context.scene
     scene.gravity = (0.0, 0.0, -9.81)
@@ -232,6 +364,15 @@ def main():
     for frame in range(2, scene.frame_end + 1):
         scene.frame_set(frame)
         bpy.context.view_layer.update()
+
+    if args.type == "pants":
+        fit_pants_surface_regions(
+            body_trees,
+            garment_objects,
+            body_min_height,
+            body_height,
+            profile,
+        )
 
     depsgraph = bpy.context.evaluated_depsgraph_get()
     final_intersections = count_surface_intersections(

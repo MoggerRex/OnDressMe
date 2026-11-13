@@ -60,7 +60,8 @@ Esta aplicación todavía no ejecuta InstantMesh ni Garment3DGen. Para simular, 
 
 ### Limitaciones de esta etapa
 
-- Se admiten camisetas de manga corta y pantalones para una persona aproximadamente erguida. El pantalón se ajusta entre la cadera y los tobillos; la camiseta usa las secciones del torso.
+- Se admiten camisetas de manga corta y pantalones para una persona aproximadamente erguida. Cuando SAM 3D proporciona las anclas MHR, el pantalón usa caderas, rodillas y tobillos para orientar la cintura y el eje de cada pierna. Blender ajusta la pretina y acerca el asiento y la entrepierna a la superficie corporal antes y después de simular, conservando una holgura mínima para la colisión y evitar que la tela se hunda. El cuerpo sigue siendo la superficie de colisión.
+- El GLB del avatar continúa siendo una malla estática: no se exporta un armature ni pesos de skinning. El ajuste y la simulación solicitados son estáticos y usan los puntos anatómicos MHR como referencias. Después de reiniciar el backend hay que volver a generar el maniquí para que sus anclas queden disponibles.
 - OnDressMe no reconstruye actualmente la prenda desde la foto. La malla recibida se escala y centra con medidas corporales; antes de la simulación Blender proyecta hacia fuera del cuerpo los vértices que empiezan penetrados.
 - La simulación y exportación con Blender están integradas. La comprobación de intersecciones compara superficies triangulares y advierte si encuentra cruces; no demuestra ausencia de toda penetración volumétrica.
 - Se probó el ajuste y la simulación local con una malla corporal SAM 3D real generada desde `persona.png` y `camisa_star.glb`. El resultado se revisó desde frente y perfil; la calidad puede variar con la postura y las mallas de entrada.
