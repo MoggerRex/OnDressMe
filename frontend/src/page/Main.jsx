@@ -271,6 +271,7 @@ export default function Main() {
 				<div className={activeView === 'DressMe' ? 'closet-heading dressing-room-closet-heading' : 'closet-heading'}>
 					<div className="closet-icon"><Shirt size={18} /></div>
 					<div><span className="eyebrow">{activeView === 'DressMe' ? 'Wardrobe' : 'Digital closet'}</span><h2 id="closet-title">{activeView === 'DressMe' ? 'Choose an item' : 'Your clothes'}</h2></div>
+					{activeView === 'DressMe' && <SaveLookButton saved={saved} onClick={toggleSaveCurrentLook} />}
 				</div>
 				<div className="category-tabs" role="tablist" aria-label="Clothing categories">
 					{categories.map((category) => (
@@ -552,7 +553,6 @@ export default function Main() {
 																<span className="outfit-slot-visual" style={{ '--garment-color': item.color }}>
 																	<SlotIcon size={34} strokeWidth={1.5} />
 																</span>
-																<span className="outfit-slot-copy"><small>{category}</small><strong>{item.name}</strong></span>
 															</button>
 														);
 													})}
@@ -598,7 +598,6 @@ export default function Main() {
 											<span className="eyebrow">Current selection</span>
 											<strong>{selectedItems[visibleItems[0]?.type]?.name || 'Choose an item'}</strong>
 										</div>
-										<SaveLookButton saved={saved} onClick={toggleSaveCurrentLook} />
 									</div>
 								)}
 								<div className={activeView === 'Avatar' ? 'look-score' : 'look-score is-hidden'} id="perfil">

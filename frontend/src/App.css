@@ -931,8 +931,7 @@ button:focus-visible, a:focus-visible { outline: 2px solid var(--app-accent); ou
 
 .dressing-room-grid .outfit-slot {
   min-height: 0;
-  grid-template-rows: minmax(0, 1fr) auto;
-  gap: 2px;
+  grid-template-rows: minmax(0, 1fr);
   padding: 4px;
   border-color: rgba(255, 255, 255, .16);
   border-radius: 5px;
@@ -957,31 +956,6 @@ button:focus-visible, a:focus-visible { outline: 2px solid var(--app-accent); ou
 .dressing-room-grid .outfit-slot-visual > svg {
   width: 30px;
   height: 30px;
-}
-
-.outfit-slot-copy {
-  min-width: 0;
-  display: grid;
-  gap: 1px;
-  text-align: left;
-}
-
-.outfit-slot-copy small,
-.outfit-slot-copy strong {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.outfit-slot-copy small {
-  color: rgba(255, 255, 255, .72);
-  font-size: 7px;
-}
-
-.outfit-slot-copy strong {
-  color: #fff;
-  font-size: 8px;
-  font-weight: 600;
 }
 
 .dressing-room-grid .undertone-controls {
@@ -1027,17 +1001,18 @@ button:focus-visible, a:focus-visible { outline: 2px solid var(--app-accent); ou
   white-space: nowrap;
 }
 
-.dressing-room-footer .save-look-button {
-  min-height: 40px;
-  padding-inline: 16px;
+.dressing-room-closet-heading .save-look-button {
+  min-height: 36px;
+  gap: 5px;
+  padding-inline: 8px;
   border-color: #80674d;
   background: #f0e2d4;
   color: #27231f;
-  font-size: 11px;
+  font-size: 9px;
 }
 
-.dressing-room-footer .save-look-button:hover,
-.dressing-room-footer .save-look-button.is-saved {
+.dressing-room-closet-heading .save-look-button:hover,
+.dressing-room-closet-heading .save-look-button.is-saved {
   border-color: #a5896d;
   background: #e6d0bb;
 }
@@ -1054,7 +1029,8 @@ button:focus-visible, a:focus-visible { outline: 2px solid var(--app-accent); ou
 .dressing-room-closet-heading h2 {
   margin-top: 4px;
   color: var(--app-ink-strong);
-  font-size: 20px;
+  font-size: 17px;
+  white-space: nowrap;
 }
 
 .dressing-room-grid .closet-panel {
