@@ -169,6 +169,22 @@ class GarmentPipelineTests(unittest.TestCase):
         )
         self.assertIsNotNone(profile.posterior_anchor_xz)
 
+    def test_back_of_the_waistband_rises_only_a_little_above_the_front(self):
+        # Regression: the rear rim used to sit ~5.5% of body height above the front
+        # and flared away from the lower back.
+        result = load_garment_mesh(
+            make_mesh_bytes("glb"), "pants.glb", make_test_body(), "pants",
+            body_landmarks=make_mhr_landmarks(),
+        )
+        body_height = result.metrics["body_height_units"]
+        rise = result.metrics["fit_posterior_rise_units"]
+
+        self.assertLessEqual(rise, 0.025 * body_height)
+        self.assertLessEqual(
+            float(result.scene.bounds[1, 1]),
+            result.metrics["fit_waist_y"] + rise + 1e-4,
+        )
+
     def test_posterior_waist_anchor_stays_outside_the_measured_body_surface(self):
         body = make_test_body()
         vertices = np.asarray(body.vertices)

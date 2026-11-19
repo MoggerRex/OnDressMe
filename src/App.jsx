@@ -17,6 +17,15 @@ import {
 } from './services/ondressmeApi';
 import useObjectUrl from './hooks/useObjectUrl';
 
+const garmentLabels = {
+  tshirt: { name: 'camiseta', article: 'una camiseta' },
+  tank: { name: 'camiseta sin mangas', article: 'una camiseta sin mangas' },
+  longsleeve: { name: 'camisa manga larga', article: 'una camisa de manga larga' },
+  pants: { name: 'pantalón', article: 'un pantalón' },
+  shorts: { name: 'short', article: 'un short' },
+  shoes: { name: 'zapatos', article: 'un par de zapatos (o un zapato)' },
+};
+
 const GARMENT_BLOB_CACHE_LIMIT_BYTES = 32 * 1024 * 1024;
 
 function cacheGarmentBlob(cache, id, blob) {
@@ -45,6 +54,7 @@ function getCachedGarmentBlob(cache, id) {
 export default function App() {
   const [bodyPhoto, setBodyPhoto] = useState(null);
   const [garmentType, setGarmentType] = useState('tshirt');
+  const [garmentFit, setGarmentFit] = useState('regular');
   const [garmentMeshFile, setGarmentMeshFile] = useState(null);
   const [avatarBlob, setAvatarBlob] = useState(null);
   const [avatarId, setAvatarId] = useState(null);
@@ -109,7 +119,7 @@ export default function App() {
     setError('');
     setGarmentNotice('');
     try {
-      const result = await generateGarment(garmentMeshFile, avatarId, garmentType);
+      const result = await generateGarment(garmentMeshFile, avatarId, garmentType, garmentFit);
       const pipelineInfo = JSON.parse(result.pipelineInfo || '{}');
       const intersectionPairs = pipelineInfo.metrics?.penetration_triangle_pairs;
       if (!Number.isSafeInteger(intersectionPairs) || intersectionPairs < 0) {
@@ -265,10 +275,32 @@ export default function App() {
               className="mb-4 min-h-11 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 text-sm text-slate-100 disabled:opacity-50"
             >
               <option value="tshirt">Camiseta de manga corta</option>
+              <option value="tank">Camiseta sin mangas</option>
+              <option value="longsleeve">Camisa de manga larga</option>
               <option value="pants">Pantalón</option>
+              <option value="shorts">Short</option>
+              <option value="shoes">Zapatos</option>
             </select>
+            {garmentType !== 'shoes' && (
+              <>
+                <label className="mb-2 block text-sm text-slate-300" htmlFor="garment-fit">
+                  Ajuste
+                </label>
+                <select
+                  id="garment-fit"
+                  value={garmentFit}
+                  disabled={!avatarId || avatarBusy || garmentBusy || Boolean(loadingGarmentId)}
+                  onChange={(event) => setGarmentFit(event.target.value)}
+                  className="mb-4 min-h-11 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 text-sm text-slate-100 disabled:opacity-50"
+                >
+                  <option value="tight">Ajustado</option>
+                  <option value="regular">Normal</option>
+                  <option value="loose">Holgado</option>
+                </select>
+              </>
+            )}
             <label className="mb-3 block text-sm text-slate-300" htmlFor="garment-mesh">
-              Malla 3D de {garmentType === 'pants' ? 'un pantalón' : 'una camiseta'} (GLB u OBJ)
+              Malla 3D de {garmentLabels[garmentType].article} (GLB u OBJ)
             </label>
             <input
               id="garment-mesh"
@@ -300,7 +332,7 @@ export default function App() {
               )}
               {garmentBusy
                 ? 'Ajustando y simulando...'
-                : `Simular ${garmentType === 'pants' ? 'pantalón' : 'camiseta'}`}
+                : `${garmentType === 'shoes' ? 'Ajustar' : 'Simular'} ${garmentLabels[garmentType].name}`}
             </button>
             <p className="mt-3 text-xs leading-5 text-amber-200/80">
               Una foto no basta para esta etapa. Garment3DGen deforma una malla

@@ -7,10 +7,27 @@ from pathlib import Path
 import numpy as np
 import trimesh
 
+from services.body_skeleton import arm_vertex_mask, has_arm_bones, without_arms
+from services.leg_fit import body_crotch_y, fit_leg_sections, garment_crotch_y
+from services.sleeve_fit import keep_off_arms, retarget_sleeves
+from services.garment_rig import (
+    lookup_vertex_weights,
+    read_garment_rig,
+    retarget_offsets,
+)
+
 
 MAX_GARMENT_MESH_BYTES = 64 * 1024 * 1024
 MAX_GARMENT_VERTICES = 500_000
-SUPPORTED_GARMENT_TYPES = {"tshirt", "pants"}
+UPPER_GARMENT_TYPES = {"tshirt", "tank", "longsleeve"}
+LOWER_GARMENT_TYPES = {"pants", "shorts"}
+SUPPORTED_GARMENT_TYPES = UPPER_GARMENT_TYPES | LOWER_GARMENT_TYPES | {"shoes"}
+FIT_MULTIPLIERS = {"tight": 0.2, "regular": 1.0, "loose": 2.0}
+# Ease added over the body, per garment type, at the "regular" fit.
+TORSO_EASE = {"tshirt": 0.20, "longsleeve": 0.20, "tank": 0.06}
+HIP_EASE = 0.12
+LEG_EASE = {"pants": 0.06, "shorts": 0.14}
+SHORTS_HEM_ABOVE_KNEE = 0.12  # hem height as a share of the knee-to-hip distance
 PANTS_WAIST_CLEARANCE_FACTOR = 1.02
 
 
@@ -401,6 +418,9 @@ def _validate_body_mesh(body_mesh: trimesh.Trimesh) -> np.ndarray:
 
 def _body_torso_profile(
     vertices: np.ndarray,
+    landmarks: dict[str, np.ndarray] | None = None,
+    ease: float = 0.20,
+    armpit: bool = False,
 ) -> tuple[
     float,
     float,
@@ -424,15 +444,26 @@ def _body_torso_profile(
             "La malla corporal debe estar erguida y usar el eje Y como vertical."
         )
 
+    body_width = float(bounds[1, 0] - bounds[0, 0])
+    # Los huesos de brazos y manos se excluyen de las secciones del torso.
+    vertices, _ = without_arms(vertices, landmarks, body_height)
     center_x = float(np.median(vertices[:, 0]))
     normalized_y = (vertices[:, 1] - bounds[0, 1]) / body_height
-    body_width = float(bounds[1, 0] - bounds[0, 0])
     central = np.abs(vertices[:, 0] - center_x) <= max(
         body_width * 0.20, body_height * 0.14
     )
     section_widths = []
     section_depths = []
-    for fraction in (0.58, 0.64, 0.70, 0.76, 0.82):
+    fractions = (0.58, 0.64, 0.70, 0.76, 0.82)
+    if armpit and landmarks is not None and "left-shoulder" in landmarks:
+        # Sleeveless: the armhole edge must stop where the arm starts, so the
+        # width is the torso at the armpit (shoulder joint minus ~6% of height).
+        shoulder_y = float(
+            np.mean([landmarks["left-shoulder"][1], landmarks["right-shoulder"][1]])
+        )
+        armpit_fraction = (shoulder_y - 0.06 * body_height - bounds[0, 1]) / body_height
+        fractions = (armpit_fraction - 0.03, armpit_fraction, armpit_fraction + 0.02)
+    for fraction in fractions:
         band = np.abs(normalized_y - fraction) <= 0.025
         samples = vertices[band & central]
         if len(samples) < 8:
@@ -448,7 +479,7 @@ def _body_torso_profile(
             "No se pudieron medir secciones fiables del torso SAM 3D."
         )
 
-    target_width = max(section_widths) * 1.20
+    target_width = max(section_widths) * (1.0 + ease)
     target_height = body_height * 0.35
     centerline_fractions = np.linspace(0.50, 0.85, 18)
     centerline_x, centerline_z = _body_section_centers(
@@ -491,6 +522,8 @@ def _body_torso_profile(
 def _body_pants_profile(
     vertices: np.ndarray,
     landmarks: dict[str, np.ndarray] | None = None,
+    hem: str = "ankle",
+    ease: float = HIP_EASE,
 ) -> PantsBodyProfile:
     bounds = np.vstack((vertices.min(axis=0), vertices.max(axis=0)))
     body_height = float(bounds[1, 1] - bounds[0, 1])
@@ -502,8 +535,11 @@ def _body_pants_profile(
             "La malla corporal debe estar erguida y usar el eje Y como vertical."
         )
 
-    center_x = float(np.median(vertices[:, 0]))
     body_width = float(bounds[1, 0] - bounds[0, 0])
+    # Las manos cerca de la cadera no deben medirse como cadera: se descartan
+    # los vértices asignados a los huesos de brazos y manos.
+    vertices, _ = without_arms(vertices, landmarks, body_height)
+    center_x = float(np.median(vertices[:, 0]))
     normalized_y = (vertices[:, 1] - bounds[0, 1]) / body_height
     central_limit = max(body_width * 0.20, body_height * 0.14)
     landmark_anchored = landmarks is not None
@@ -550,7 +586,7 @@ def _body_pants_profile(
                 "Las anclas MHR no permiten determinar la orientación frontal del cuerpo."
             )
         front_direction /= front_length
-        posterior_rise = body_height * 0.055
+        posterior_rise = body_height * 0.02
 
     hip_widths = []
     hip_depths = []
@@ -581,6 +617,15 @@ def _body_pants_profile(
         )
 
     low_fraction = 0.02
+    if hem == "knee":
+        # Shorts end a little above the knee (MHR knees when available).
+        knee_fraction = 0.285
+        if landmarks is not None:
+            knee_fraction = float(
+                (np.mean([landmarks["left-knee"][1], landmarks["right-knee"][1]]) - bounds[0, 1])
+                / body_height
+            )
+        low_fraction = knee_fraction + SHORTS_HEM_ABOVE_KNEE * (hip_fraction - knee_fraction)
     profile_fractions = np.linspace(low_fraction, 0.60, 30)
     if landmarks is not None:
         profile_fractions = np.linspace(low_fraction, 0.64, 32)
@@ -725,7 +770,7 @@ def _body_pants_profile(
             center_x,
         )
     return PantsBodyProfile(
-        target_width=max(hip_widths) * 1.12,
+        target_width=max(hip_widths) * (1.0 + ease),
         target_height=body_height * (waist_fraction - low_fraction),
         center_x=float(np.median(hip_centers_x)),
         center_y=float(
@@ -735,7 +780,7 @@ def _body_pants_profile(
         center_z=float(np.median(hip_centers_z)),
         body_min_y=float(bounds[0, 1]),
         body_height=body_height,
-        target_depth=max(hip_depths) * 1.12,
+        target_depth=max(hip_depths) * (1.0 + ease),
         low_fraction=low_fraction,
         waist_fraction=waist_fraction,
         centerline_fractions=centerline_fractions,
@@ -761,19 +806,11 @@ def _body_pants_profile(
     )
 
 
-def load_garment_mesh(
-    contents: bytes,
-    filename: str,
-    body_mesh: trimesh.Trimesh,
-    garment_type: str = "tshirt",
-    body_landmarks: dict[str, np.ndarray] | None = None,
-) -> GarmentBuildResult:
-    garment_type = garment_type.strip().lower()
-    if garment_type not in SUPPORTED_GARMENT_TYPES:
-        raise GarmentPipelineError(
-            "Tipo de prenda no admitido. Usa 'tshirt' o 'pants'."
-        )
+def read_garment_scene(contents: bytes, filename: str, require_upright: bool = True):
+    """Load and validate an uploaded GLB/OBJ garment.
 
+    Returns (scene, mesh_format, vertex_count, face_count, bounds, extents).
+    """
     if not contents:
         raise GarmentPipelineError("El archivo de malla de prenda está vacío.")
     if len(contents) > MAX_GARMENT_MESH_BYTES:
@@ -839,7 +876,7 @@ def load_garment_mesh(
     if garment_bounds.shape != (2, 3) or not np.isfinite(garment_bounds).all():
         raise GarmentPipelineError("No se pudieron calcular los límites de la malla.")
     garment_extents = garment_bounds[1] - garment_bounds[0]
-    if (
+    if require_upright and (
         garment_extents[1] <= 0
         or garment_extents[0] <= 0
         or garment_extents[1] < max(garment_extents[0], garment_extents[2]) * 0.35
@@ -847,12 +884,115 @@ def load_garment_mesh(
         raise GarmentPipelineError(
             "La malla debe estar aproximadamente erguida, con el eje Y vertical."
         )
+    return scene, mesh_format, vertex_count, face_count, garment_bounds, garment_extents
+
+
+def _garment_torso_core(scene: trimesh.Scene):
+    """Bounds of a long-sleeve shirt without its sleeves, from the hem width.
+
+    The hem is the narrowest lower band, so sleeves (T/A pose) do not count.
+    Returns (bounds (2, 3), hem centre x, hem width).
+    """
+    points = np.concatenate(
+        [
+            trimesh.transform_points(np.asarray(scene.geometry[name].vertices, dtype=np.float64), scene.graph[node][0])
+            for node in scene.graph.nodes_geometry
+            for name in [scene.graph[node][1]]
+        ]
+    )
+    y_low, y_range = points[:, 1].min(), float(np.ptp(points[:, 1]))
+    best = None
+    for start in np.linspace(0.04, 0.30, 8):
+        band = points[np.abs((points[:, 1] - y_low) / y_range - start) <= 0.03]
+        if len(band) >= 20:
+            width = float(np.ptp(band[:, 0]))
+            if best is None or width < best[0]:
+                best = (width, float((band[:, 0].min() + band[:, 0].max()) / 2))
+    if best is None or best[0] <= 0:
+        raise GarmentPipelineError("No se pudo medir el ancho del torso de la camisa.")
+    width, center = best
+    core = points[np.abs(points[:, 0] - center) <= width / 2 * 1.08]
+    bounds = np.array(
+        [
+            [center - width / 2, core[:, 1].min(), core[:, 2].min()],
+            [center + width / 2, core[:, 1].max(), core[:, 2].max()],
+        ]
+    )
+    return bounds, center, width
+
+
+def _garment_armpit_y(vertices: np.ndarray) -> float | None:
+    """Height of a sleeveless garment's armpit: its widest level in the upper part."""
+    y_low, y_high = float(vertices[:, 1].min()), float(vertices[:, 1].max())
+    if y_high - y_low <= 0:
+        return None
+    best = None
+    edges = np.linspace(y_low, y_high, 25)
+    for low, high in zip(edges[:-1], edges[1:]):
+        if (low + high) / 2 < y_low + 0.45 * (y_high - y_low):
+            continue
+        slab = vertices[(vertices[:, 1] >= low) & (vertices[:, 1] < high)]
+        if len(slab) >= 8:
+            width = float(np.ptp(slab[:, 0]))
+            if best is None or width > best[0]:
+                best = (width, (low + high) / 2)
+    return None if best is None else best[1]
+
+
+def load_garment_mesh(
+    contents: bytes,
+    filename: str,
+    body_mesh: trimesh.Trimesh,
+    garment_type: str = "tshirt",
+    body_landmarks: dict[str, np.ndarray] | None = None,
+    fit: str = "regular",
+) -> GarmentBuildResult:
+    fit = fit.strip().lower()
+    if fit not in FIT_MULTIPLIERS:
+        raise GarmentPipelineError("Ajuste no admitido. Usa 'tight', 'regular' o 'loose'.")
+    looseness = FIT_MULTIPLIERS[fit]
+    garment_type = garment_type.strip().lower()
+    if garment_type not in SUPPORTED_GARMENT_TYPES:
+        raise GarmentPipelineError(
+            "Tipo de prenda no admitido. Usa 'tshirt', 'tank', 'longsleeve', 'pants', 'shorts' o 'shoes'."
+        )
+
+    if garment_type == "shoes":
+        from services.shoe_fit import fit_shoes
+
+        return fit_shoes(contents, filename, body_mesh, body_landmarks)
+
+    (
+        scene,
+        mesh_format,
+        vertex_count,
+        face_count,
+        garment_bounds,
+        garment_extents,
+    ) = read_garment_scene(contents, filename)
+
+    if garment_type == "longsleeve":
+        if not has_arm_bones(body_landmarks):
+            raise GarmentPipelineError(
+                "La camisa de manga larga necesita los huesos de los brazos (hombro, codo y muñeca) del avatar."
+            )
+        # Scale by the torso only; the sleeves are bent onto the arm bones later.
+        garment_bounds, _, _ = _garment_torso_core(scene)
+        garment_extents = garment_bounds[1] - garment_bounds[0]
 
     body_vertices = _validate_body_mesh(body_mesh)
+    arm_mask = arm_vertex_mask(body_vertices, body_landmarks)
+    arm_excluded = int(arm_mask.sum()) if arm_mask is not None else 0
     leg_centers = None
     pants_profile = None
-    if garment_type == "pants":
-        pants_profile = _body_pants_profile(body_vertices, body_landmarks)
+    is_lower = garment_type in LOWER_GARMENT_TYPES
+    if is_lower:
+        pants_profile = _body_pants_profile(
+            body_vertices,
+            body_landmarks,
+            hem="knee" if garment_type == "shorts" else "ankle",
+            ease=HIP_EASE * looseness,
+        )
         target_width = pants_profile.target_width
         target_height = pants_profile.target_height
         center_x = pants_profile.center_x
@@ -880,7 +1020,12 @@ def load_garment_mesh(
             body_min_y,
             body_height,
             target_depth,
-        ) = _body_torso_profile(body_vertices)
+        ) = _body_torso_profile(
+            body_vertices,
+            body_landmarks,
+            ease=TORSO_EASE[garment_type] * looseness,
+            armpit=garment_type == "tank",
+        )
         target_fraction_low = float(centerline_fractions[0])
         target_fraction_high = float(centerline_fractions[-1])
     if target_width <= 0 or target_height <= 0 or target_depth <= 0:
@@ -914,6 +1059,39 @@ def load_garment_mesh(
         [scale_x, scale_y, scale_z]
     )
     transform[:3, 3] = target_center - transform[:3, :3] @ source_center
+
+    # Huesos propios de la prenda (skin del GLB): permiten mapear cada pierna
+    # de la prenda sobre el hueso correspondiente del cuerpo SAM 3D.
+    rig_offsets = None
+    rig_joint_count = 0
+    if is_lower and mesh_format == "glb" and body_landmarks:
+        garment_rig = read_garment_rig(contents)
+        if garment_rig is not None:
+            source_vertices = np.concatenate(
+                [
+                    trimesh.transform_points(
+                        np.asarray(scene.geometry[geometry_name].vertices, dtype=np.float64),
+                        scene.graph[node][0],
+                    )
+                    for node in scene.graph.nodes_geometry
+                    for geometry_name in [scene.graph[node][1]]
+                ],
+                axis=0,
+            )
+            rig_weights = lookup_vertex_weights(
+                garment_rig,
+                source_vertices,
+                tolerance=float(np.max(garment_extents)) * 1e-3,
+            )
+            if rig_weights is not None:
+                rig_joints = trimesh.transform_points(
+                    garment_rig.joint_positions, transform
+                )
+                retargeted = retarget_offsets(
+                    garment_rig, rig_weights, body_landmarks, rig_joints
+                )
+                if retargeted is not None:
+                    rig_offsets, rig_joint_count = retargeted
     scene.apply_transform(transform)
 
     target_y_low = body_min_y + body_height * target_fraction_low
@@ -953,6 +1131,7 @@ def load_garment_mesh(
 
     fitted_world_vertices = []
     scene_nodes = list(scene.graph.nodes_geometry)
+    rig_cursor = 0
     for node in scene_nodes:
         node_transform, geometry_name = scene.graph[node]
         geometry = scene.geometry[geometry_name]
@@ -960,6 +1139,10 @@ def load_garment_mesh(
             np.asarray(geometry.vertices, dtype=np.float64),
             node_transform,
         )
+        node_rig_offsets = None
+        if rig_offsets is not None:
+            node_rig_offsets = rig_offsets[rig_cursor : rig_cursor + len(world_vertices)]
+            rig_cursor += len(world_vertices)
         garment_height_fraction = np.clip(
             (world_vertices[:, 1] - target_y_low) / target_height,
             0.0,
@@ -974,7 +1157,13 @@ def load_garment_mesh(
         target_z = np.interp(body_fractions, centerline_fractions, centerline_z)
         world_vertices[:, 0] += target_x - reference_x
         world_vertices[:, 2] += target_z - reference_z
-        if leg_centers is not None and garment_leg_centers is not None:
+        if leg_centers is not None and (
+            garment_leg_centers is not None or node_rig_offsets is not None
+        ):
+            geometric_legs = garment_leg_centers is not None
+            leg_reference = (
+                garment_leg_centers if geometric_legs else leg_centers
+            )
             left_x = np.interp(
                 body_fractions, centerline_fractions, leg_centers[:, 0, 0]
             )
@@ -990,22 +1179,22 @@ def load_garment_mesh(
             garment_left_x = np.interp(
                 body_fractions,
                 centerline_fractions,
-                garment_leg_centers[:, 0, 0],
+                leg_reference[:, 0, 0],
             )
             garment_right_x = np.interp(
                 body_fractions,
                 centerline_fractions,
-                garment_leg_centers[:, 1, 0],
+                leg_reference[:, 1, 0],
             )
             garment_left_z = np.interp(
                 body_fractions,
                 centerline_fractions,
-                garment_leg_centers[:, 0, 1],
+                leg_reference[:, 0, 1],
             )
             garment_right_z = np.interp(
                 body_fractions,
                 centerline_fractions,
-                garment_leg_centers[:, 1, 1],
+                leg_reference[:, 1, 1],
             )
             side_weight = np.clip(
                 (world_vertices[:, 0] - center_x) / (target_width * 0.12) + 0.5,
@@ -1026,6 +1215,12 @@ def load_garment_mesh(
                 + (right_z - garment_right_z - (target_z - reference_z))
                 * side_weight
             )
+            if node_rig_offsets is not None:
+                # Con huesos, cada vértice sigue a los huesos de su pierna
+                # según sus pesos de skin, no una división por mitades en X.
+                leg_offset_x = node_rig_offsets[:, 0] - (target_x - reference_x)
+                if not geometric_legs:
+                    leg_offset_z = np.zeros_like(leg_offset_z)
             world_vertices[:, 0] += leg_blend * leg_offset_x
             world_vertices[:, 2] += leg_blend * leg_offset_z
         fitted_world_vertices.append(world_vertices)
@@ -1183,6 +1378,96 @@ def load_garment_mesh(
                 )
             fitted_world_vertices[index] = world_vertices
 
+    if is_lower and body_landmarks and pants_profile is not None:
+        sizes = [len(vertices) for vertices in fitted_world_vertices]
+        # Put the garment's crotch at the avatar's crotch (it used to hang lower
+        # and leave a panel of fabric between the legs).
+        wanted = body_crotch_y(body_landmarks, body_height)
+        found = garment_crotch_y(np.concatenate(fitted_world_vertices), center_x, body_height)
+        span = target_y_high - target_y_low
+        if (
+            found is not None
+            and target_y_low + 0.1 * span < found < target_y_high - 0.1 * span
+            and target_y_low + 0.1 * span < wanted < target_y_high - 0.1 * span
+        ):
+            for vertices in fitted_world_vertices:
+                vertices[:, 1] = np.interp(
+                    vertices[:, 1], [target_y_low, found, target_y_high], [target_y_low, wanted, target_y_high]
+                )
+        shaped, legs_fitted = fit_leg_sections(
+            np.concatenate(fitted_world_vertices),
+            body_vertices,
+            body_landmarks,
+            center_x,
+            float(target_y_low),
+            body_height,
+            1.0 + LEG_EASE[garment_type] * looseness,
+        )
+        fitted_world_vertices = np.split(shaped, np.cumsum(sizes)[:-1])
+    else:
+        legs_fitted = 0
+
+    if garment_type == "tank" and body_landmarks and "left-shoulder" in body_landmarks:
+        # Put the garment's armhole at the avatar's armpit, so the armhole sits
+        # where the arm starts instead of above or below it.
+        garment_armpit = _garment_armpit_y(np.concatenate(fitted_world_vertices))
+        body_armpit = float(
+            np.mean([body_landmarks["left-shoulder"][1], body_landmarks["right-shoulder"][1]])
+            - 0.06 * body_height
+        )
+        if garment_armpit is not None and target_y_low < garment_armpit < target_y_high and (
+            target_y_low < body_armpit < target_y_high
+        ):
+            knots_in = [target_y_low, garment_armpit, target_y_high]
+            knots_out = [target_y_low, body_armpit, target_y_high]
+            # The armhole edge must stay on the torso side of the arm: above the
+            # armpit the half width may only grow up to the shoulder joint.
+            shoulder_half = float(
+                np.mean(
+                    [
+                        abs(body_landmarks["left-shoulder"][0] - center_x),
+                        abs(body_landmarks["right-shoulder"][0] - center_x),
+                    ]
+                )
+            )
+            top_half = max(target_width / 2.0, shoulder_half)
+            span = max(target_y_high - body_armpit, 1e-6)
+            for vertices in fitted_world_vertices:
+                vertices[:, 1] = np.interp(vertices[:, 1], knots_in, knots_out)
+                rise = np.clip((vertices[:, 1] - body_armpit) / span, 0.0, 1.0)
+                limit = target_width / 2.0 + (top_half - target_width / 2.0) * rise**2
+                dx = vertices[:, 0] - center_x
+                vertices[:, 0] = center_x + np.sign(dx) * np.minimum(np.abs(dx), limit)
+
+    if garment_type == "tank" and has_arm_bones(body_landmarks):
+        # The armhole edge must not enter the arm (Blender would project it to
+        # the outer side of the arm and leave flaps).
+        sizes = [len(vertices) for vertices in fitted_world_vertices]
+        cleared, _ = keep_off_arms(
+            np.concatenate(fitted_world_vertices),
+            center_x,
+            body_vertices,
+            body_landmarks,
+            body_height,
+            margin=0.004,
+        )
+        fitted_world_vertices = np.split(cleared, np.cumsum(sizes)[:-1])
+
+    sleeves_fitted = 0
+    if garment_type == "longsleeve":
+        sizes = [len(vertices) for vertices in fitted_world_vertices]
+        bent, sleeve_info = retarget_sleeves(
+            np.concatenate(fitted_world_vertices),
+            center_x,
+            target_width / 2.0,
+            body_vertices,
+            body_landmarks,
+            body_height,
+            radius_margin=1.06 + 0.10 * looseness,
+        )
+        fitted_world_vertices = np.split(bent, np.cumsum(sizes)[:-1])
+        sleeves_fitted = sleeve_info["sleeves_fitted"]
+
     for node, world_vertices in zip(scene_nodes, fitted_world_vertices):
         node_transform, geometry_name = scene.graph[node]
         inverse_transform = np.linalg.inv(node_transform)
@@ -1191,18 +1476,19 @@ def load_garment_mesh(
             inverse_transform,
         )
 
-    fit_region = "cadera y piernas" if garment_type == "pants" else "torso"
+    fit_region = "cadera y piernas" if is_lower else "torso"
     warnings = [
         f"La geometría recibida se ajustó por secciones de {fit_region} SAM 3D y luego se simuló; no se reconstruyó desde una foto.",
         "Antes de simular, Blender proyecta fuera del cuerpo los vértices de la prenda que empiezan en penetración.",
     ]
-    if garment_type == "pants" and (
-        leg_centers is None or garment_leg_centers is None
+    if is_lower and (
+        leg_centers is None
+        or (garment_leg_centers is None and rig_offsets is None)
     ):
         warnings.append(
             "La malla corporal no permitió separar ambas piernas; se aplicó un centrado general por altura."
         )
-    if garment_type == "pants" and (
+    if is_lower and (
         pants_profile is not None and not pants_profile.landmark_anchored
     ):
         warnings.append(
@@ -1233,7 +1519,20 @@ def load_garment_mesh(
         "fit_torso_y_min": round(float(target_y_low), 5),
         "fit_torso_y_max": round(float(target_y_high), 5),
         "simulation": "pending",
+        "fit_body_arm_vertices_excluded": int(arm_excluded),
+        "fit_garment_rig": (
+            "skin_joint_retarget" if rig_offsets is not None else "none"
+        ),
+        "fit_garment_rig_joints": int(rig_joint_count),
     }
+    metrics["fit_ease"] = fit
+    metrics["fit_legs_fitted"] = legs_fitted
+    if garment_type == "longsleeve":
+        metrics["fit_sleeves_fitted"] = sleeves_fitted
+        if sleeves_fitted < 2:
+            warnings.append(
+                "No se detectaron ambas mangas (la camisa debe tener los brazos extendidos fuera del torso); las mangas no se ajustaron a los brazos."
+            )
     if pants_profile is not None:
         metrics.update(
             {

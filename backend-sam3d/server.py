@@ -25,6 +25,7 @@ sys.path.append(repo_path)
 from sam_3d_body import SAM3DBodyEstimator, load_sam_3d_body_hf
 from sam_3d_body.metadata.mhr70 import mhr_names
 from services.blender_simulator import GarmentSimulationError
+from services.body_skeleton import BODY_LANDMARK_NAMES
 from services.garment_pipeline import (
     GarmentPipelineError,
     MAX_GARMENT_MESH_BYTES,
@@ -215,16 +216,7 @@ async def generate_3d(image: UploadFile = File(...)):
             outputs[0]["pred_keypoints_3d"],
             outputs[0]["pred_vertices"],
         )
-        landmark_names = (
-            "left-hip",
-            "right-hip",
-            "left-knee",
-            "right-knee",
-            "left-ankle",
-            "right-ankle",
-            "nose",
-            "neck",
-        )
+        landmark_names = BODY_LANDMARK_NAMES
         body_landmarks = {
             name: keypoints[mhr_names.index(name)]
             for name in landmark_names
@@ -267,6 +259,7 @@ async def generate_garment(
     garment_mesh: UploadFile | None = File(default=None),
     avatar_id: str = Form(...),
     garment_type: str = Form(default="tshirt"),
+    fit: str = Form(default="regular"),
     image: UploadFile | None = File(default=None),
 ):
     try:
@@ -289,7 +282,7 @@ async def generate_garment(
         if garment_type not in SUPPORTED_GARMENT_TYPES:
             raise HTTPException(
                 status_code=422,
-                detail="Tipo de prenda no admitido. Usa 'tshirt' o 'pants'.",
+                detail="Tipo de prenda no admitido. Usa 'tshirt', 'tank', 'longsleeve', 'pants', 'shorts' o 'shoes'.",
             )
 
         body_mesh, body_landmarks = _cached_avatar(avatar_id)
@@ -316,6 +309,7 @@ async def generate_garment(
             mesh_bytes,
             garment_mesh.filename or "",
             garment_type,
+            fit.strip().lower(),
         )
 
         return FileResponse(

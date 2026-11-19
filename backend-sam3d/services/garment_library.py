@@ -63,7 +63,7 @@ def body_fingerprint(
     landmarks: dict[str, np.ndarray],
 ) -> str:
     digest = hashlib.sha256()
-    digest.update(b"ondressme-body-v1\0")
+    digest.update(b"ondressme-body-v2-skeleton\0")
     for array in (body_mesh.vertices, body_mesh.faces):
         normalized = np.ascontiguousarray(array)
         if normalized.dtype.kind == "f":
@@ -252,9 +252,13 @@ def process_or_reuse_garment(
     mesh_contents: bytes,
     filename: str,
     garment_type: str,
+    fit: str = "regular",
 ) -> GarmentLibraryResult:
     body_id = body_fingerprint(body_mesh, body_landmarks)
-    source_id = source_fingerprint(mesh_contents)
+    # The same mesh with another fit is a different garment (cached apart).
+    source_id = source_fingerprint(
+        mesh_contents if fit == "regular" else mesh_contents + b"|fit=" + fit.encode()
+    )
     lock_key = f"{body_id}:{garment_type}:{source_id}"
 
     with _processing_lock(lock_key):
@@ -274,14 +278,22 @@ def process_or_reuse_garment(
             body_mesh,
             garment_type,
             body_landmarks=body_landmarks,
+            fit=fit,
         )
-        glb, _, penetration_pairs = simulate_static_garment(
-            body_mesh,
-            build.scene,
-            garment_type,
-        )
-        build.metrics["simulation"] = "blender_completed"
-        build.metrics["penetration_check"] = "triangle_surface_intersections"
+        if garment_type == "shoes":
+            # Los zapatos son rígidos: ya quedaron ajustados a los huesos del pie.
+            glb = bytes(build.scene.export(file_type="glb"))
+            penetration_pairs = 0
+            build.metrics["penetration_check"] = "not_applicable_rigid"
+        else:
+            glb, _, penetration_pairs = simulate_static_garment(
+                body_mesh,
+                build.scene,
+                garment_type,
+                body_landmarks=body_landmarks,
+            )
+            build.metrics["simulation"] = "blender_completed"
+            build.metrics["penetration_check"] = "triangle_surface_intersections"
         build.metrics["penetration_triangle_pairs"] = penetration_pairs
         warnings = build.warnings
         if penetration_pairs:

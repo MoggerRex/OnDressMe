@@ -3,7 +3,11 @@ import { getGarmentModelUrl } from '../../services/ondressmeApi';
 
 const garmentLabels = {
   tshirt: 'Camiseta',
+  tank: 'Sin mangas',
+  longsleeve: 'Manga larga',
+  shorts: 'Short',
   pants: 'Pantalón',
+  shoes: 'Zapatos',
 };
 
 export default function ClosetItem({ item, avatarId, isWorn, onToggleWear, disabled }) {

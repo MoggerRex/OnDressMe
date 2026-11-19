@@ -34,6 +34,12 @@ SIMULATION_PROFILES = {
 }
 
 
+SIMULATION_PROFILES["tank"] = SIMULATION_PROFILES["tshirt"]
+SIMULATION_PROFILES["longsleeve"] = {**SIMULATION_PROFILES["tshirt"], "frames": 24}
+SIMULATION_PROFILES["shorts"] = SIMULATION_PROFILES["pants"]
+LOWER_TYPES = ("pants", "shorts")
+
+
 def parse_arguments():
     parser = argparse.ArgumentParser()
     parser.add_argument("--body", required=True)
@@ -237,11 +243,12 @@ def fit_pants_surface_regions(
     )
 
 
-def add_top_edge_pins(obj, settings, pin_fraction, group_name):
+def add_top_edge_pins(obj, settings, pin_fraction, group_name, crotch_half_width=None):
     world_vertices = [obj.matrix_world @ vertex.co for vertex in obj.data.vertices]
     max_height = max(vertex.z for vertex in world_vertices)
     min_height = min(vertex.z for vertex in world_vertices)
     garment_height = max_height - min_height
+    centre_x = (min(v.x for v in world_vertices) + max(v.x for v in world_vertices)) / 2
     if garment_height <= 0:
         raise RuntimeError(f"La prenda {obj.name} no tiene altura válida.")
 
@@ -256,6 +263,11 @@ def add_top_edge_pins(obj, settings, pin_fraction, group_name):
             ),
             1.0,
         )
+        if crotch_half_width is not None:
+            # Pants/shorts: hold the crotch seam too, or it sags between the legs.
+            in_seam = abs(vertex.x - centre_x) < crotch_half_width
+            if in_seam and vertex.z < max_height - garment_height * 0.45:
+                weight = 1.0
         if weight > 0:
             pin_group.add([index], weight, "REPLACE")
             pinned_vertices += 1
@@ -314,7 +326,7 @@ def main():
         garment_objects,
         profile["collision_distance"] * 3,
     )
-    if args.type == "pants":
+    if args.type in LOWER_TYPES:
         fit_pants_surface_regions(
             body_trees,
             garment_objects,
@@ -346,7 +358,8 @@ def main():
             obj,
             settings,
             profile["pin_fraction"],
-            "WaistbandAnchor" if args.type == "pants" else "ShoulderHold",
+            "WaistbandAnchor" if args.type in LOWER_TYPES else "ShoulderHold",
+            crotch_half_width=body_height * 0.03 if args.type in LOWER_TYPES else None,
         )
 
     scene = bpy.context.scene
@@ -365,7 +378,7 @@ def main():
         scene.frame_set(frame)
         bpy.context.view_layer.update()
 
-    if args.type == "pants":
+    if args.type in LOWER_TYPES:
         fit_pants_surface_regions(
             body_trees,
             garment_objects,

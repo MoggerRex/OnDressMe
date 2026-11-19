@@ -51,7 +51,7 @@ export async function generateAvatar(imageFile) {
   };
 }
 
-export async function generateGarment(meshFile, avatarId, garmentType = 'tshirt') {
+export async function generateGarment(meshFile, avatarId, garmentType = 'tshirt', fit = 'regular') {
   if (!avatarId) {
     throw new Error('Genera de nuevo el maniquí para vincular la prenda.');
   }
@@ -60,6 +60,7 @@ export async function generateGarment(meshFile, avatarId, garmentType = 'tshirt'
   formData.append('garment_mesh', meshFile);
   formData.append('avatar_id', avatarId);
   formData.append('garment_type', garmentType);
+  formData.append('fit', fit);
   const { blob, response } = await requestGlb('/generate-garment', {
     method: 'POST',
     body: formData,
