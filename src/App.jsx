@@ -209,7 +209,10 @@ export default function App() {
         <h1 className="bg-gradient-to-r from-pink-400 to-violet-400 bg-clip-text text-xl font-bold text-transparent">
           OnDressMe
         </h1>
-        <span className="text-xs text-slate-400">Prueba virtual 3D</span>
+        <nav className="flex items-center gap-5 text-sm">
+          <span className="font-semibold text-pink-300">Probador</span>
+          <a href="#closet" className="text-slate-400 hover:text-slate-100">Closet</a>
+        </nav>
       </header>
 
       <main className="mx-auto grid w-full max-w-7xl grid-cols-1 gap-6 p-5 lg:grid-cols-[320px_minmax(0,1fr)]">

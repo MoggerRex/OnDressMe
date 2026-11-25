@@ -34,3 +34,7 @@ backend-sam3d/storage/wardrobe/
 *.obj
 *.glb
 !backend-sam3d/templates/*.glb
+
+# Cache de Python
+__pycache__/
+*.pyc
