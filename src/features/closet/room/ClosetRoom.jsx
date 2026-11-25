@@ -1,59 +1,32 @@
-import { useEffect, useRef } from 'react';
+import { useRef } from 'react';
 import { useFrame, useThree } from '@react-three/fiber';
-import { PointerLockControls } from '@react-three/drei';
 import * as THREE from 'three';
 import HangingGarment from './HangingGarment';
+import { RAILS, RAIL_LEN, placeItems, railToWorld } from './layout';
 
-const W = 8, D = 6, H = 3, RAIL_Y = 2.0, SPACING = 0.4, PER_RAIL = 17;
+const W = 8, D = 6, H = 3;
 
-// Barras: pared trasera, izquierda y derecha. Las prendas miran hacia el centro.
-const RAILS = [
-  { start: [-3.2, RAIL_Y, -2.7], step: [SPACING, 0, 0], rotY: 0, len: 6.8, axis: 'x' },
-  { start: [-3.7, RAIL_Y, -2.4], step: [0, 0, SPACING], rotY: Math.PI / 2, len: 4.8, axis: 'z' },
-  { start: [3.7, RAIL_Y, -2.4], step: [0, 0, SPACING], rotY: -Math.PI / 2, len: 4.8, axis: 'z' },
-];
-
-// shortcut: pasadas 51 prendas se reutilizan los mismos huecos (se solapan), ampliar con más barras.
-function slotFor(i) {
-  const r = RAILS[Math.floor(i / PER_RAIL) % RAILS.length];
-  const n = i % PER_RAIL;
-  return { position: r.start.map((v, k) => v + r.step[k] * n), rotY: r.rotY };
-}
-
-function Player({ player }) {
-  const { camera } = useThree();
-  const keys = useRef({});
-
-  useEffect(() => {
-    camera.position.set(0, 1.6, 2);
-    const down = (e) => { keys.current[e.code] = true; };
-    const up = (e) => { keys.current[e.code] = false; };
-    window.addEventListener('keydown', down);
-    window.addEventListener('keyup', up);
-    return () => {
-      window.removeEventListener('keydown', down);
-      window.removeEventListener('keyup', up);
-    };
-  }, [camera]);
+// Cámara estática: en 'overview' mira la barra elegida desde el centro; en 'rail'/'detail' se acerca a ella y sigue a scroll.cur.
+function CameraRig({ mode, rail, scroll, motion }) {
+  const camera = useThree((s) => s.camera);
+  const pos = useRef(null);
+  const look = useRef(new THREE.Vector3());
 
   useFrame((_, rawDt) => {
     const dt = Math.min(rawDt, 0.05);
-    const k = keys.current;
-    const fwd = (k.KeyW || k.ArrowUp ? 1 : 0) - (k.KeyS || k.ArrowDown ? 1 : 0);
-    const side = (k.KeyD || k.ArrowRight ? 1 : 0) - (k.KeyA || k.ArrowLeft ? 1 : 0);
-    const run = k.ShiftLeft || k.ShiftRight;
-    const dir = new THREE.Vector3();
-    camera.getWorldDirection(dir);
-    dir.y = 0; dir.normalize();
-    const right = new THREE.Vector3().crossVectors(dir, camera.up);
-    const move = dir.multiplyScalar(fwd).add(right.multiplyScalar(side));
-    const moving = move.lengthSq() > 0;
-    const speed = run ? 3.2 : 1.8;
-    if (moving) move.normalize().multiplyScalar(speed * dt);
-    camera.position.x = THREE.MathUtils.clamp(camera.position.x + move.x, -W / 2 + 0.9, W / 2 - 0.9);
-    camera.position.z = THREE.MathUtils.clamp(camera.position.z + move.z, -D / 2 + 0.9, D / 2 - 0.6);
-    player.pos.copy(camera.position);
-    player.speed = moving ? speed / 1.8 : 0;
+    const prev = scroll.cur;
+    scroll.cur = THREE.MathUtils.damp(scroll.cur, scroll.target, 5, dt);
+    motion.vel = (scroll.cur - prev) / Math.max(dt, 0.001);
+
+    const near = mode !== 'overview';
+    const wantPos = near ? railToWorld(rail, scroll.cur, -0.35, 1.6) : new THREE.Vector3(0, 1.65, 0.6);
+    const wantLook = railToWorld(rail, near ? scroll.cur : 0, near ? -0.35 : -0.3, 0);
+    if (!pos.current) { pos.current = wantPos.clone(); look.current.copy(wantLook); }
+    const k = 1 - Math.exp(-4 * dt);
+    pos.current.lerp(wantPos, k);
+    look.current.lerp(wantLook, k);
+    camera.position.copy(pos.current);
+    camera.lookAt(look.current);
   });
   return null;
 }
@@ -75,22 +48,12 @@ function Room() {
           <meshStandardMaterial color="#d9d2c6" roughness={0.9} />
         </mesh>
       ))}
-      {RAILS.map((r, i) => (
-        <mesh
-          key={i}
-          position={[r.start[0] + (r.axis === 'x' ? r.len / 2 : 0), RAIL_Y + 0.1, r.start[2] + (r.axis === 'z' ? r.len / 2 : 0)]}
-          rotation={r.axis === 'x' ? [0, 0, Math.PI / 2] : [Math.PI / 2, 0, 0]}
-        >
-          <cylinderGeometry args={[0.015, 0.015, r.len, 10]} />
-          <meshStandardMaterial color="#c9a45c" metalness={0.8} roughness={0.25} />
-        </mesh>
-      ))}
     </group>
   );
 }
 
-export default function ClosetRoom({ items, controlsRef, onGarmentError }) {
-  const player = useRef({ pos: new THREE.Vector3(), speed: 0 }).current;
+export default function ClosetRoom({ items, nav, scroll, motion, onSelect, onHover, onGarmentError }) {
+  const placed = placeItems(items);
   return (
     <>
       <color attach="background" args={['#14111a']} />
@@ -98,10 +61,29 @@ export default function ClosetRoom({ items, controlsRef, onGarmentError }) {
       <pointLight position={[0, 2.8, 0]} intensity={14} />
       <pointLight position={[0, 2.6, -2]} intensity={8} />
       <Room />
-      <Player player={player} />
-      <PointerLockControls ref={controlsRef} />
-      {items.map((item, i) => (
-        <HangingGarment key={item.id} item={item} slot={slotFor(i)} player={player} onError={onGarmentError} />
+      <CameraRig mode={nav.mode} rail={nav.rail} scroll={scroll} motion={motion} />
+      {RAILS.map((r, ri) => (
+        <group key={ri} position={r.pos} rotation={[0, r.rotY, 0]}>
+          <mesh rotation={[0, 0, Math.PI / 2]}>
+            <cylinderGeometry args={[0.015, 0.015, RAIL_LEN + 0.3, 10]} />
+            <meshStandardMaterial color="#c9a45c" metalness={0.8} roughness={0.25} />
+          </mesh>
+          {items.map((item, i) => placed[i].rail === ri && (
+            <HangingGarment
+              key={item.id}
+              item={item}
+              x={placed[i].x}
+              interactive={nav.mode === 'rail' && ri === nav.rail}
+              selected={nav.selected === item.id}
+              steps={nav.steps}
+              scroll={scroll}
+              motion={motion}
+              onSelect={onSelect}
+              onHover={onHover}
+              onError={onGarmentError}
+            />
+          ))}
+        </group>
       ))}
     </>
   );

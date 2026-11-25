@@ -1,43 +1,164 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Canvas } from '@react-three/fiber';
-import { Shirt, Trash2, Upload } from 'lucide-react';
+import { Search, Shirt, Trash2, Upload } from 'lucide-react';
 import ClosetRoom from './ClosetRoom';
+import { RAILS, SPACING, START_RAIL, placeItems, railRange } from './layout';
+
+const HINTS = {
+  overview: '← → cambia de barra · ↑ acercarse',
+  rail: '← → o scroll recorre la barra · clic en una prenda para verla · ↓ / Esc alejarse',
+  detail: '← → gira la prenda · Esc la devuelve a la barra',
+};
+
+const clamp = (v, [a, b]) => Math.min(b, Math.max(a, v));
+
+// Pregunta el nombre con el que se guardará la prenda.
+function NamePrompt({ file, onSave, onCancel }) {
+  const [name, setName] = useState(file.name.replace(/\.[^.]+$/, ''));
+  return (
+    <div className="absolute inset-0 z-20 flex items-center justify-center bg-slate-950/70">
+      <form
+        className="w-80 rounded-xl border border-slate-700 bg-slate-900 p-5"
+        onSubmit={(e) => { e.preventDefault(); onSave(name.trim() || file.name); }}
+        onKeyDown={(e) => { if (e.key === 'Escape') onCancel(); }}
+      >
+        <h3 className="font-semibold">¿Cómo se llama esta prenda?</h3>
+        <p className="mt-1 truncate text-xs text-slate-400">{file.name}</p>
+        <input
+          autoFocus
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          onFocus={(e) => e.target.select()}
+          className="mt-3 w-full rounded-lg border border-slate-700 bg-slate-800 px-3 py-2 text-sm outline-none focus:border-violet-500"
+        />
+        <div className="mt-4 flex justify-end gap-2 text-sm">
+          <button type="button" onClick={onCancel} className="rounded-lg px-3 py-2 text-slate-300 hover:bg-slate-800">Cancelar</button>
+          <button type="submit" className="rounded-lg bg-violet-600 px-4 py-2 font-semibold hover:bg-violet-500">Guardar</button>
+        </div>
+      </form>
+    </div>
+  );
+}
 
 // shortcut: prendas solo en memoria, se pierden al recargar; persistir en IndexedDB/backend después.
 export default function ClosetPage() {
   const [items, setItems] = useState([]);
-  const controlsRef = useRef();
+  const [pending, setPending] = useState([]); // archivos esperando nombre
+  const [query, setQuery] = useState('');
+  const [hoverId, setHoverId] = useState(null);
+  const [nav, setNav] = useState({ mode: 'overview', rail: START_RAIL, selected: null, steps: 0 });
+  const scroll = useRef({ target: 0, cur: 0 }).current; // posición de la cámara a lo largo de la barra (m)
+  const motion = useRef({ vel: 0 }).current;
+  const live = useRef({});
+  const placed = placeItems(items);
+  live.current = { nav, range: railRange(placed, nav.rail) };
 
-  function addFiles(files) {
-    const glbs = [...files].filter((f) => /\.(glb|obj)$/i.test(f.name));
-    setItems((cur) => [
-      ...cur,
-      ...glbs.map((f) => ({ id: crypto.randomUUID(), name: f.name, ext: f.name.slice(-3).toLowerCase(), url: URL.createObjectURL(f) })),
-    ]);
+  function savePending(name) {
+    const f = pending[0];
+    setItems((cur) => [...cur, { id: crypto.randomUUID(), name, ext: f.name.slice(-3).toLowerCase(), url: URL.createObjectURL(f) }]);
+    setPending((cur) => cur.slice(1));
   }
 
   function remove(id) {
     setItems((cur) => cur.filter((i) => i.id !== id));
+    setNav((n) => (n.selected === id ? { ...n, mode: 'rail', selected: null } : n));
   }
+
+  // Lleva la cámara a la prenda y la abre en vista de detalle.
+  function goTo(item) {
+    const p = placed[items.indexOf(item)];
+    scroll.target = p.x;
+    if (p.rail !== live.current.nav.rail) scroll.cur = p.x;
+    setNav({ mode: 'detail', rail: p.rail, selected: item.id, steps: 0 });
+    setQuery('');
+    document.activeElement?.blur();
+  }
+
+  const results = query.trim()
+    ? items.filter((i) => i.name.toLowerCase().includes(query.trim().toLowerCase())).slice(0, 6)
+    : [];
+
+  useEffect(() => {
+    function onKey(e) {
+      if (e.target instanceof HTMLInputElement) return; // escribiendo (buscador / nombre)
+      const { nav: n, range } = live.current;
+      const dir = e.key === 'ArrowRight' ? 1 : e.key === 'ArrowLeft' ? -1 : 0;
+      if (!dir && !['ArrowUp', 'ArrowDown', 'Escape'].includes(e.key)) return;
+      e.preventDefault();
+      if (n.mode === 'overview') {
+        if (dir) setNav({ ...n, rail: Math.min(RAILS.length - 1, Math.max(0, n.rail + dir)) });
+        else if (e.key === 'ArrowUp') {
+          scroll.target = scroll.cur = range[0]; // empieza en la primera prenda de la barra
+          setNav({ ...n, mode: 'rail' });
+        }
+      } else if (n.mode === 'rail') {
+        if (dir) scroll.target = clamp(scroll.target + dir * SPACING, range);
+        else setNav({ ...n, mode: 'overview' }); // ↓ o Esc
+      } else if (dir) {
+        setNav({ ...n, steps: n.steps + dir });
+      } else if (e.key === 'Escape') {
+        setNav({ ...n, mode: 'rail', selected: null });
+      }
+    }
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [scroll]);
+
+  const labelId = nav.mode === 'detail' ? nav.selected : nav.mode === 'rail' ? hoverId : null;
+  const label = items.find((i) => i.id === labelId)?.name;
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100">
-      <header className="sticky top-0 z-10 flex items-center justify-between border-b border-slate-800 bg-slate-950/90 px-6 py-4 backdrop-blur">
+      <header className="sticky top-0 z-10 flex items-center justify-between gap-4 border-b border-slate-800 bg-slate-950/90 px-6 py-4 backdrop-blur">
         <h1 className="bg-gradient-to-r from-pink-400 to-violet-400 bg-clip-text text-xl font-bold text-transparent">
           OnDressMe
         </h1>
-        <nav className="flex items-center gap-5 text-sm">
+        <div className="flex items-center gap-5 text-sm">
+          <div className="relative">
+            <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+            <input
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && results[0]) goTo(results[0]);
+                if (e.key === 'Escape') { setQuery(''); e.target.blur(); }
+              }}
+              placeholder="Buscar prenda…"
+              className="w-56 rounded-full border border-slate-700 bg-slate-900 py-1.5 pl-9 pr-3 outline-none focus:border-violet-500"
+            />
+            {query.trim() && (
+              <ul className="absolute right-0 mt-2 w-64 overflow-hidden rounded-xl border border-slate-700 bg-slate-900 shadow-xl">
+                {results.map((i) => (
+                  <li key={i.id}>
+                    <button type="button" onClick={() => goTo(i)} className="block w-full truncate px-4 py-2 text-left hover:bg-slate-800">{i.name}</button>
+                  </li>
+                ))}
+                {!results.length && <li className="px-4 py-2 text-slate-400">Sin resultados</li>}
+              </ul>
+            )}
+          </div>
           <a href="#" className="text-slate-400 hover:text-slate-100">Probador</a>
           <span className="font-semibold text-pink-300">Closet</span>
-        </nav>
+        </div>
       </header>
 
-      <main className="relative h-[calc(100vh-65px)]">
-        <div className="h-full cursor-pointer" onClick={() => controlsRef.current?.lock()}>
-          <Canvas camera={{ fov: 70, near: 0.05 }}>
-            <ClosetRoom items={items} controlsRef={controlsRef} onGarmentError={remove} />
-          </Canvas>
-        </div>
+      <main
+        className="relative h-[calc(100vh-65px)]"
+        onWheel={(e) => {
+          if (live.current.nav.mode === 'rail') scroll.target = clamp(scroll.target + (e.deltaX + e.deltaY) * 0.003, live.current.range);
+        }}
+      >
+        <Canvas camera={{ fov: 60, near: 0.05 }}>
+          <ClosetRoom
+            items={items}
+            nav={nav}
+            scroll={scroll}
+            motion={motion}
+            onSelect={(id) => setNav((n) => (n.mode === 'rail' ? { ...n, mode: 'detail', selected: id, steps: 0 } : n))}
+            onHover={setHoverId}
+            onGarmentError={remove}
+          />
+        </Canvas>
 
         <aside className="absolute left-4 top-4 w-72 rounded-xl border border-slate-800 bg-slate-900/85 p-4 backdrop-blur">
           <h2 className="mb-3 flex items-center gap-2 font-semibold"><Shirt size={17} /> Mi closet</h2>
@@ -48,7 +169,10 @@ export default function ClosetPage() {
               accept=".glb,.obj"
               multiple
               hidden
-              onChange={(e) => { addFiles(e.target.files); e.target.value = ''; }}
+              onChange={(e) => {
+                setPending([...e.target.files].filter((f) => /\.(glb|obj)$/i.test(f.name)));
+                e.target.value = '';
+              }}
             />
           </label>
           <ul className="mt-3 max-h-48 space-y-1 overflow-auto text-sm">
@@ -62,10 +186,20 @@ export default function ClosetPage() {
             ))}
             {!items.length && <li className="text-xs text-slate-400">Sube una camisa y quedará colgada en la barra.</li>}
           </ul>
-          <p className="mt-3 text-xs leading-5 text-slate-400">
-            Clic en la escena para entrar · WASD o flechas para caminar · Shift corre · Esc para salir.
-          </p>
         </aside>
+
+        {label && (
+          <p className="pointer-events-none absolute left-1/2 top-5 -translate-x-1/2 rounded-full bg-slate-900/85 px-5 py-2 text-sm font-semibold">
+            {label}
+          </p>
+        )}
+        <p className="pointer-events-none absolute bottom-4 left-1/2 -translate-x-1/2 rounded-full bg-slate-900/80 px-4 py-2 text-xs text-slate-300">
+          {HINTS[nav.mode]}
+        </p>
+
+        {pending[0] && (
+          <NamePrompt key={pending[0].name + pending.length} file={pending[0]} onSave={savePending} onCancel={() => setPending((cur) => cur.slice(1))} />
+        )}
       </main>
     </div>
   );
