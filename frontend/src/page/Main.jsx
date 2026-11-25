@@ -4,6 +4,7 @@ import {
 	Check,
 	ChevronLeft,
 	ChevronRight,
+	Download,
 	Glasses,
 	Info,
 	Maximize2,
@@ -105,6 +106,64 @@ function getLookSignature(items) {
 	return Object.values(items).map((item) => item.id).join('|');
 }
 
+function downloadOutfitPalette(slots) {
+	const canvas = document.createElement('canvas');
+	canvas.width = 1000;
+	canvas.height = 340;
+	const context = canvas.getContext('2d');
+	if (!context) throw new Error('Unable to create the palette image.');
+
+	context.fillStyle = '#f7f5f0';
+	context.fillRect(0, 0, canvas.width, canvas.height);
+	context.fillStyle = '#25231f';
+	context.font = '600 27px Arial, sans-serif';
+	context.fillText('ON DRESS ME  /  OUTFIT PALETTE', 34, 48);
+	context.fillStyle = '#77736d';
+	context.font = '14px Arial, sans-serif';
+	context.fillText(new Date().toLocaleDateString(), 34, 74);
+
+	const cardWidth = 172;
+	const cardGap = 14;
+	const cardLeft = 34;
+	const cardTop = 100;
+	slots.forEach(({ category, item }, index) => {
+		const left = cardLeft + index * (cardWidth + cardGap);
+		context.fillStyle = '#ffffff';
+		context.fillRect(left, cardTop, cardWidth, 206);
+		context.fillStyle = item.color;
+		context.fillRect(left + 12, cardTop + 12, cardWidth - 24, 104);
+		context.fillStyle = '#77736d';
+		context.font = '12px Arial, sans-serif';
+		context.fillText(category.toUpperCase(), left + 12, cardTop + 139);
+		context.fillStyle = '#25231f';
+		context.font = '600 15px Arial, sans-serif';
+		context.fillText(item.shade, left + 12, cardTop + 161);
+		context.fillStyle = '#77736d';
+		context.font = '13px Arial, sans-serif';
+		context.fillText(item.color.toUpperCase(), left + 12, cardTop + 184);
+	});
+
+	return new Promise((resolve, reject) => {
+		canvas.toBlob((blob) => {
+			if (!blob) {
+				reject(new Error('Unable to export the palette image.'));
+				return;
+			}
+			try {
+				const url = URL.createObjectURL(blob);
+				const link = document.createElement('a');
+				link.href = url;
+				link.download = 'ondressme-outfit-palette.png';
+				link.click();
+				window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+				resolve();
+			} catch (error) {
+				reject(error);
+			}
+		}, 'image/png');
+	});
+}
+
 function localizeSavedStyle(style) {
 	if (!style || style === 'Invierno profundo') return 'Deep Winter';
 	const styleLabels = { Otoño: 'Autumn', Primavera: 'Spring', Invierno: 'Winter', Verano: 'Summer' };
@@ -147,13 +206,14 @@ function SaveLookButton({ saved, onClick }) {
 export default function Main() {
 	const [activeView, setActiveView] = useState('DressMe');
 	const [menuOpen, setMenuOpen] = useState(false);
+	const [paletteDownloadError, setPaletteDownloadError] = useState('');
 	const [theme, setTheme] = useState(() => {
 		try {
 			const storedTheme = window.localStorage.getItem('ondressme-theme');
 			if (storedTheme === 'dark') return 'noir';
-			return themeOptions.some((option) => option.value === storedTheme) ? storedTheme : 'noir';
+			return themeOptions.some((option) => option.value === storedTheme) ? storedTheme : 'amber';
 		} catch {
-			return 'noir';
+			return 'amber';
 		}
 	});
 	const [activeCategory, setActiveCategory] = useState('Tops');
@@ -212,6 +272,16 @@ export default function Main() {
 
 	function previewItem(item) {
 		setSelectedItems((current) => ({ ...current, [item.type]: item }));
+	}
+
+	async function handleDownloadPalette() {
+		setPaletteDownloadError('');
+		try {
+			await downloadOutfitPalette(outfitSlots);
+		} catch (error) {
+			console.error('Failed to download the outfit palette.', error);
+			setPaletteDownloadError('Could not download the palette. Please try again.');
+		}
 	}
 
 	function toggleSaveCurrentLook() {
@@ -299,6 +369,7 @@ export default function Main() {
 								type="button"
 							>
 								<span className="garment-preview" style={{ '--garment-color': item.color }}>
+									{activeView === 'DressMe' && <PiCoatHanger aria-hidden="true" className="garment-hanger" />}
 									<ItemIcon size={42} strokeWidth={1.35} />
 									{isSelected && <span className="garment-check"><Check size={12} strokeWidth={2.5} /></span>}
 								</span>
@@ -312,12 +383,27 @@ export default function Main() {
 					<button className="action-button" onClick={() => setActiveView('Closet')} type="button">View full closet <PiCoatHanger size={15} /></button>
 				</div>}
 				<div className={activeView === 'DressMe' ? 'outfit-palette dressing-room-outfit-palette' : 'outfit-palette'}>
-					<div className="palette-title"><span className="eyebrow">Outfit palette</span><Sparkles size={14} /></div>
+					<div className="palette-title">
+						<span className="eyebrow">Outfit palette</span>
+						<div className="palette-title-actions">
+							<button
+								aria-label="Download outfit color palette"
+								className="palette-download"
+								onClick={handleDownloadPalette}
+								title="Download palette as PNG"
+								type="button"
+							>
+								<Download aria-hidden="true" size={14} />
+							</button>
+							<Sparkles aria-hidden="true" size={14} />
+						</div>
+					</div>
 					<div className="selected-swatches" aria-label="Outfit colors">
 						{(activeView === 'DressMe' ? outfitSlots.map(({ item }) => item) : [selectedItems.shirt, selectedItems.pants, selectedItems.accessory]).map((item) => (
 							<span key={item.type} title={item.shade} style={{ backgroundColor: item.color }} />
 						))}
 					</div>
+					{paletteDownloadError && <p className="palette-download-error" role="status">{paletteDownloadError}</p>}
 				</div>
 			</aside>
 		);
@@ -351,8 +437,17 @@ export default function Main() {
 				>
 					{menuOpen ? <X size={20} /> : <Menu size={20} />}
 				</button>
-				<a className="brand" href="#inicio" aria-label="OnDressMe, home">
-					<img className="brand-logo" src="/ondressme-logo.png" alt="OnDressMe logo" />
+				<a
+					className="brand"
+					href="#simulador"
+					aria-label="OnDressMe, go to DressMe"
+					onClick={(event) => {
+						event.preventDefault();
+						setActiveView('DressMe');
+						setMenuOpen(false);
+					}}
+				>
+					<img className="brand-logo" src="/ondressme-logo2.png" alt="OnDressMe logo" />
 				</a>
 				<nav id="main-navigation" className={menuOpen ? 'main-nav is-open' : 'main-nav'} aria-label="Main navigation">
 					<a className={activeView === 'DressMe' ? 'nav-link is-current' : 'nav-link'} href="#simulador" onClick={(event) => { event.preventDefault(); setActiveView('DressMe'); setMenuOpen(false); }}>DressMe</a>
