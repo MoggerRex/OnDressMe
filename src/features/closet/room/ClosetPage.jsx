@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Canvas } from '@react-three/fiber';
 import { Search, Shirt, Trash2, Upload } from 'lucide-react';
 import ClosetRoom from './ClosetRoom';
-import { RAILS, SPACING, START_RAIL, placeItems, railRange } from './layout';
+import { PER_RAIL, RAILS, SPACING, START_RAIL, placeItems, railRange } from './layout';
 
 const HINTS = {
   overview: '← → cambia de barra · ↑ acercarse',
@@ -10,6 +10,7 @@ const HINTS = {
   detail: '← → gira la prenda · Esc la devuelve a la barra',
 };
 
+const RAIL_NAMES = ['Izquierda', 'Fondo', 'Derecha'];
 const clamp = (v, [a, b]) => Math.min(b, Math.max(a, v));
 
 // Pregunta el nombre con el que se guardará la prenda.
@@ -55,7 +56,7 @@ export default function ClosetPage() {
 
   function savePending(name) {
     const f = pending[0];
-    setItems((cur) => [...cur, { id: crypto.randomUUID(), name, ext: f.name.slice(-3).toLowerCase(), url: URL.createObjectURL(f) }]);
+    setItems((cur) => [...cur, { id: crypto.randomUUID(), name, ext: f.name.slice(-3).toLowerCase(), size: f.size, url: URL.createObjectURL(f) }]);
     setPending((cur) => cur.slice(1));
   }
 
@@ -105,7 +106,8 @@ export default function ClosetPage() {
   }, [scroll]);
 
   const labelId = nav.mode === 'detail' ? nav.selected : nav.mode === 'rail' ? hoverId : null;
-  const label = items.find((i) => i.id === labelId)?.name;
+  const shown = items.find((i) => i.id === labelId);
+  const shownIdx = items.indexOf(shown);
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100">
@@ -160,7 +162,8 @@ export default function ClosetPage() {
           />
         </Canvas>
 
-        <aside className="absolute left-4 top-4 w-72 rounded-xl border border-slate-800 bg-slate-900/85 p-4 backdrop-blur">
+        <div className="absolute left-4 top-4 w-72 space-y-3">
+        <aside className="rounded-xl border border-slate-800 bg-slate-900/85 p-4 backdrop-blur">
           <h2 className="mb-3 flex items-center gap-2 font-semibold"><Shirt size={17} /> Mi closet</h2>
           <label className="flex cursor-pointer items-center justify-center gap-2 rounded-xl bg-violet-600 px-4 py-2.5 text-sm font-semibold hover:bg-violet-500">
             <Upload size={16} /> Subir camisa (.glb / .obj)
@@ -188,11 +191,20 @@ export default function ClosetPage() {
           </ul>
         </aside>
 
-        {label && (
-          <p className="pointer-events-none absolute left-1/2 top-5 -translate-x-1/2 rounded-full bg-slate-900/85 px-5 py-2 text-sm font-semibold">
-            {label}
-          </p>
+        {shown && (
+          <section className="rounded-xl border border-slate-800 bg-slate-900/85 p-4 backdrop-blur">
+            <h2 className="mb-3 text-xs font-semibold uppercase tracking-wide text-slate-400">Datos de la prenda</h2>
+            <p className="break-words text-lg font-semibold">{shown.name}</p>
+            <dl className="mt-3 grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5 text-sm">
+              <dt className="text-slate-400">Formato</dt><dd>{shown.ext.toUpperCase()}</dd>
+              <dt className="text-slate-400">Tamaño</dt><dd>{(shown.size / 1048576).toFixed(2)} MB</dd>
+              <dt className="text-slate-400">Barra</dt><dd>{RAIL_NAMES[placed[shownIdx].rail]}</dd>
+              <dt className="text-slate-400">Posición</dt><dd>{(shownIdx % PER_RAIL) + 1}</dd>
+            </dl>
+          </section>
         )}
+        </div>
+
         <p className="pointer-events-none absolute bottom-4 left-1/2 -translate-x-1/2 rounded-full bg-slate-900/80 px-4 py-2 text-xs text-slate-300">
           {HINTS[nav.mode]}
         </p>

@@ -21,7 +21,7 @@ function HangingModel({ scene, x, interactive, selected, steps, scroll, motion, 
   const place = useRef();
   const pivot = useRef();
   const yaw = useRef();
-  const swing = useRef({ ax: 0, az: 0, vx: 0.5, vz: 0.3 }); // golpe inicial: se ve viva al colgarla
+  const swing = useRef({ ax: 0, az: 0, vx: 0.15, vz: 0.1 }); // golpe inicial: se ve viva al colgarla
   const [hovered, setHovered] = useState(false);
   useCursor(hovered && interactive);
 
@@ -38,13 +38,14 @@ function HangingModel({ scene, x, interactive, selected, steps, scroll, motion, 
     p.z = damp(p.z, selected ? 0.45 : 0, 7, dt);
 
     const cur = yaw.current.rotation.y;
-    const rest = PROFILE + 2 * Math.PI * Math.round((cur - PROFILE) / (2 * Math.PI)); // perfil equivalente más cercano
-    yaw.current.rotation.y = damp(cur, selected ? steps * PROFILE : rest, 8, dt);
+    // ángulo objetivo (giro del usuario, o perfil en la barra) tomado en su equivalente más cercano: nunca da vueltas de más
+    const goal = selected ? steps * PROFILE : PROFILE;
+    yaw.current.rotation.y = damp(cur, goal + 2 * Math.PI * Math.round((cur - goal) / (2 * Math.PI)), 8, dt);
 
     // balanceo del gancho como péndulo sobre la barra (más amortiguado al verla de cerca)
     const s = swing.current;
-    const cd = selected ? 6 : 1.6;
-    s.vz += -motion.vel * 4 * dt; // el carrusel arrastra la ropa
+    const cd = selected ? 9 : 4.5; // un gancho real se asienta en 1-2 balanceos
+    s.vz += -motion.vel * 1.5 * dt; // el carrusel arrastra la ropa
     s.vx += (-30 * s.ax - cd * s.vx) * dt; s.ax += s.vx * dt;
     s.vz += (-30 * s.az - cd * s.vz) * dt; s.az += s.vz * dt;
     pivot.current.rotation.set(s.ax, 0, s.az);

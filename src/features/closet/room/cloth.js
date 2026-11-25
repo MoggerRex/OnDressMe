@@ -2,7 +2,6 @@ import * as THREE from 'three';
 
 export const TARGET_HEIGHT = 0.8; // metros
 export const SHIRT_TOP = -0.13; // parte más alta de la prenda, medida desde la barra (origen)
-const NECK_Y = SHIRT_TOP + 0.03;
 const { smoothstep, lerp, clamp } = THREE.MathUtils;
 
 function segDist(px, py, ax, ay, bx, by) {
@@ -20,19 +19,19 @@ function segment(a, b, r, mat) {
 }
 
 // Gancho: gancho curvo sobre la barra + dos brazos hasta los hombros + travesaño (como el dibujo).
-function buildHanger(tipX, tipY) {
+function buildHanger(tipX, tipY, neckY) {
   const mat = new THREE.MeshStandardMaterial({ color: '#202026', roughness: 0.4, metalness: 0.4 });
   const g = new THREE.Group();
-  const pts = [new THREE.Vector3(0, NECK_Y, 0), new THREE.Vector3(0, -0.06, 0)];
+  const pts = [new THREE.Vector3(0, neckY, 0), new THREE.Vector3(0, neckY / 2, 0)];
   for (let a = -90; a <= 200; a += 15) {
     const r = (a * Math.PI) / 180;
     pts.push(new THREE.Vector3(0.028 * Math.cos(r), 0.028 * Math.sin(r), 0));
   }
   g.add(new THREE.Mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), 80, 0.0035, 6), mat));
-  const N = new THREE.Vector3(0, NECK_Y, 0);
+  const N = new THREE.Vector3(0, neckY, 0);
   const R = new THREE.Vector3(tipX, tipY, 0);
   const L = new THREE.Vector3(-tipX, tipY, 0);
-  [[N, R], [N, L], [L, R]].forEach(([a, b]) => g.add(segment(a, b, 0.004, mat)));
+  [[N, R], [N, L], [L, R]].forEach(([a, b]) => g.add(segment(a, b, 0.005, mat)));
   [R, L].forEach((p) => {
     const s = new THREE.Mesh(new THREE.SphereGeometry(0.009, 8, 6), mat);
     s.position.copy(p);
@@ -88,7 +87,7 @@ export function buildGarment(scene) {
     let sy = 0, n = 0;
     each((x, y) => { if (Math.abs(x) > 0.92 * maxX) { sy += y; n++; } });
     const slope = Math.atan2(py - sy / n, maxX - px);
-    const target = lerp(0.96, 1.54, clamp((ratio - 0.2) / 0.35, 0, 1));
+    const target = lerp(1.15, 1.54, clamp((ratio - 0.2) / 0.35, 0, 1));
     theta = Math.max(0, target - slope);
   }
 
@@ -115,25 +114,38 @@ export function buildGarment(scene) {
   });
 
   // Gancho: puntas en los hombros (70% del ancho), cuello arriba al centro
-  const tipX = 0.7 * hw;
+  const tipX = 0.55 * hw;
   let tipY = SHIRT_TOP - 0.03;
   let top = -Infinity;
   for (let i = 0; i < total; i++) {
-    if (Math.abs(Math.abs(goal[i * 3]) - tipX) < 0.04) top = Math.max(top, goal[i * 3 + 1]);
+    if (Math.abs(Math.abs(goal[i * 3]) - tipX) < 0.03) top = Math.max(top, goal[i * 3 + 1]);
   }
-  if (top > -Infinity) tipY = top + 0.004;
+  // El gancho va DENTRO de la prenda: la tela de los hombros cae sobre los brazos y solo el cuello asoma por el cuello de la camisa
+  if (top > -Infinity) tipY = top - 0.045;
+  const neckY = tipY + 0.05;
+  // Centro (en profundidad) del grosor de los hombros: es donde debe quedar el gancho, no el centro de la caja del modelo
+  let zMin = Infinity, zMax = -Infinity;
+  for (let i = 0; i < total; i++) {
+    if (Math.abs(Math.abs(goal[i * 3]) - tipX) < 0.05 && goal[i * 3 + 1] > tipY) {
+      zMin = Math.min(zMin, goal[i * 3 + 2]); zMax = Math.max(zMax, goal[i * 3 + 2]);
+    }
+  }
+  const hangerZ = zMin < zMax ? (zMin + zMax) / 2 : 0;
+  for (let i = 2; i < total * 3; i += 3) goal[i] -= hangerZ; // la prenda se centra sobre el gancho (el gancho queda sobre la barra)
+  parts.forEach(({ geo }) => geo.translate(0, 0, -hangerZ));
 
   // Rigidez por vértice: pegada al gancho en la línea de hombros, floja hacia abajo y en las puntas de manga
   const k = new Float32Array(total), cd = new Float32Array(total);
   for (let i = 0; i < total; i++) {
     const x = goal[i * 3], y = goal[i * 3 + 1];
     const d = Math.min(
-      segDist(x, y, 0, NECK_Y, tipX, tipY),
-      segDist(x, y, 0, NECK_Y, -tipX, tipY),
+      segDist(x, y, 0, neckY, tipX, tipY),
+      segDist(x, y, 0, neckY, -tipX, tipY),
     );
     const l = smoothstep(d, 0.03, 0.55 * h);
-    k[i] = lerp(900, 55, Math.pow(l, 0.7));
-    cd[i] = lerp(30, 5, l);
+    k[i] = lerp(900, 80, Math.pow(l, 0.7));
+    // arriba (hombros) casi rígido y sobreamortiguado; abajo y en mangas algo subamortiguado: se mueve natural y se asienta en ~1 s
+    cd[i] = 2 * Math.sqrt(k[i]) * lerp(1.6, 0.55, l);
   }
 
   const root = new THREE.Group();
@@ -151,7 +163,7 @@ export function buildGarment(scene) {
     ranges.push({ attr: geo.attributes.position, start, count: geo.attributes.position.count });
     start += geo.attributes.position.count;
   });
-  const hanger = buildHanger(tipX, tipY);
+  const hanger = buildHanger(tipX, tipY, neckY);
   root.add(hanger);
 
   return {
@@ -202,9 +214,9 @@ export function stepCloth(sim, M, rawDt) {
     }
     sim.ready = true;
   }
-  const h = Math.min(rawDt, 0.033) / 2;
+  const h = Math.min(rawDt, 0.033) / 3;
   let energy = 0;
-  for (let sub = 0; sub < 2; sub++) {
+  for (let sub = 0; sub < 3; sub++) {
     energy = 0;
     for (let v = 0; v < n; v++) {
       const i = v * 3, gx = goal[i], gy = goal[i + 1], gz = goal[i + 2];
@@ -212,10 +224,19 @@ export function stepCloth(sim, M, rawDt) {
       const dy = e[1] * gx + e[5] * gy + e[9] * gz + e[13] - pos[i + 1];
       const dz = e[2] * gx + e[6] * gy + e[10] * gz + e[14] - pos[i + 2];
       const kk = k[v], cc = c[v];
+      const wx = pos[i] + dx, wy = pos[i + 1] + dy, wz = pos[i + 2] + dz; // objetivo en mundo
+      // la tela no se estira en vertical: el eje Y (mundo) es mucho más rígido y amortiguado que X/Z
       vel[i] += (kk * dx - cc * vel[i]) * h;
-      vel[i + 1] += (kk * dy - cc * vel[i + 1]) * h;
+      vel[i + 1] += (4 * kk * dy - 2 * cc * vel[i + 1]) * h;
       vel[i + 2] += (kk * dz - cc * vel[i + 2]) * h;
       pos[i] += vel[i] * h; pos[i + 1] += vel[i + 1] * h; pos[i + 2] += vel[i + 2] * h;
+      // la tela nunca se aleja mucho de su forma colgada
+      const ex = pos[i] - wx, ey = pos[i + 1] - wy, ez = pos[i + 2] - wz;
+      const d2 = ex * ex + ey * ey + ez * ez;
+      if (d2 > 0.0064) {
+        const f = 0.08 / Math.sqrt(d2);
+        pos[i] = wx + ex * f; pos[i + 1] = wy + ey * f; pos[i + 2] = wz + ez * f;
+      }
       energy += dx * dx + dy * dy + dz * dz + vel[i] * vel[i] + vel[i + 1] * vel[i + 1] + vel[i + 2] * vel[i + 2];
     }
   }
