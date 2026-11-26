@@ -91,14 +91,21 @@ export function buildGarment(scene) {
     theta = Math.max(0, target - slope);
   }
 
+  // Bajo de la manga (axila) en la pose original: por debajo de ahí todo es torso (costillas, cintura, dobladillo)
+  let sleeveBottom = Infinity;
+  each((x, y) => { if (Math.abs(x) > hw * 1.15) sleeveBottom = Math.min(sleeveBottom, y); });
+  sleeveBottom -= 0.01;
+
   const total = parts.reduce((a, { geo }) => a + geo.attributes.position.count, 0);
   const goal = new Float32Array(total * 3);
+  const side = new Int8Array(total); // -1/1: vértice de manga izquierda/derecha; 0: torso
   let o = 0;
   parts.forEach(({ geo }) => {
     const p = geo.attributes.position, nr = geo.attributes.normal;
     for (let i = 0; i < p.count; i++, o += 3) {
       let x = p.getX(i), y = p.getY(i);
       const w = smoothstep(Math.abs(x), hw * 0.98, hw * 1.3);
+      if (w > 0 && y >= sleeveBottom) side[o / 3] = x < 0 ? -1 : 1;
       if (theta && w) {
         const sg = x < 0 ? -1 : 1, f = -sg * theta * w, cs = Math.cos(f), sn = Math.sin(f);
         const dx = x - sg * px, dy = y - py;
@@ -133,6 +140,19 @@ export function buildGarment(scene) {
   const hangerZ = zMin < zMax ? (zMin + zMax) / 2 : 0;
   for (let i = 2; i < total * 3; i += 3) goal[i] -= hangerZ; // la prenda se centra sobre el gancho (el gancho queda sobre la barra)
   parts.forEach(({ geo }) => geo.translate(0, 0, -hangerZ));
+
+  // Colisión manga-torso: perfil del torso colgado en franjas de 2 cm (medio ancho y rango en profundidad).
+  // Al dibujar, ningún vértice de manga puede quedar dentro de ese volumen: se apoya sobre el costado.
+  const BIN = 0.02, nb = Math.ceil(h / BIN) + 4;
+  const bodyW = new Float32Array(nb).fill(-1);
+  const zLo = new Float32Array(nb).fill(Infinity), zHi = new Float32Array(nb).fill(-Infinity);
+  for (let v = 0; v < total; v++) {
+    if (side[v]) continue;
+    const bi = clamp(Math.floor((SHIRT_TOP - goal[v * 3 + 1]) / BIN), 0, nb - 1);
+    bodyW[bi] = Math.max(bodyW[bi], Math.abs(goal[v * 3]));
+    zLo[bi] = Math.min(zLo[bi], goal[v * 3 + 2]); zHi[bi] = Math.max(zHi[bi], goal[v * 3 + 2]);
+  }
+  const collider = { side, bodyW, zLo, zHi, nb, bin: BIN };
 
   // Rigidez por vértice: pegada al gancho en la línea de hombros, floja hacia abajo y en las puntas de manga
   const k = new Float32Array(total), cd = new Float32Array(total), lag = new Float32Array(total);
@@ -170,7 +190,7 @@ export function buildGarment(scene) {
 
   return {
     root,
-    sim: { n: total, goal, k, c: cd, lag, pos: new Float32Array(total * 3), vel: new Float32Array(total * 3), ranges, ready: false, asleep: false, last: new Float32Array(16), inv: new THREE.Matrix4() },
+    sim: { n: total, goal, k, c: cd, lag, collider, pos: new Float32Array(total * 3), vel: new Float32Array(total * 3), ranges, ready: false, asleep: false, last: new Float32Array(16), inv: new THREE.Matrix4() },
     dispose() {
       root.traverse((m) => {
         if (!m.isMesh) return;
@@ -184,13 +204,22 @@ export function buildGarment(scene) {
 function writeLocal(sim, M) {
   sim.inv.copy(M).invert();
   const e = sim.inv.elements, p = sim.pos;
+  const { side, bodyW, zLo, zHi, nb, bin } = sim.collider;
   for (const { attr, start, count } of sim.ranges) {
     const a = attr.array;
     for (let j = 0; j < count; j++) {
       const i = (start + j) * 3, x = p[i], y = p[i + 1], z = p[i + 2];
-      a[j * 3] = e[0] * x + e[4] * y + e[8] * z + e[12];
-      a[j * 3 + 1] = e[1] * x + e[5] * y + e[9] * z + e[13];
-      a[j * 3 + 2] = e[2] * x + e[6] * y + e[10] * z + e[14];
+      let lx = e[0] * x + e[4] * y + e[8] * z + e[12];
+      const ly = e[1] * x + e[5] * y + e[9] * z + e[13];
+      const lz = e[2] * x + e[6] * y + e[10] * z + e[14];
+      const sg = side[start + j];
+      if (sg) {
+        const bi = Math.floor((SHIRT_TOP - ly) / bin);
+        if (bi >= 0 && bi < nb && bodyW[bi] > 0 && lz > zLo[bi] - 0.01 && lz < zHi[bi] + 0.01 && sg * lx < bodyW[bi] + 0.006) {
+          lx = sg * (bodyW[bi] + 0.006); // la manga se apoya sobre el torso en vez de atravesarlo
+        }
+      }
+      a[j * 3] = lx; a[j * 3 + 1] = ly; a[j * 3 + 2] = lz;
     }
     attr.needsUpdate = true;
   }
