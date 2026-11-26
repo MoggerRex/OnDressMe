@@ -135,7 +135,7 @@ export function buildGarment(scene) {
   parts.forEach(({ geo }) => geo.translate(0, 0, -hangerZ));
 
   // Rigidez por vértice: pegada al gancho en la línea de hombros, floja hacia abajo y en las puntas de manga
-  const k = new Float32Array(total), cd = new Float32Array(total);
+  const k = new Float32Array(total), cd = new Float32Array(total), lag = new Float32Array(total);
   for (let i = 0; i < total; i++) {
     const x = goal[i * 3], y = goal[i * 3 + 1];
     const d = Math.min(
@@ -146,6 +146,8 @@ export function buildGarment(scene) {
     k[i] = lerp(900, 80, Math.pow(l, 0.7));
     // arriba (hombros) casi rígido y sobreamortiguado; abajo y en mangas algo subamortiguado: se mueve natural y se asienta en ~1 s
     cd[i] = 2 * Math.sqrt(k[i]) * lerp(1.6, 0.55, l);
+    // retraso máximo permitido: 0 sobre los brazos del gancho (la tela va pegada a ellos al mover o girar la prenda), hasta 8 cm abajo
+    lag[i] = 0.08 * smoothstep(d, 0.04, 0.2);
   }
 
   const root = new THREE.Group();
@@ -168,7 +170,7 @@ export function buildGarment(scene) {
 
   return {
     root,
-    sim: { n: total, goal, k, c: cd, pos: new Float32Array(total * 3), vel: new Float32Array(total * 3), ranges, ready: false, asleep: false, last: new Float32Array(16), inv: new THREE.Matrix4() },
+    sim: { n: total, goal, k, c: cd, lag, pos: new Float32Array(total * 3), vel: new Float32Array(total * 3), ranges, ready: false, asleep: false, last: new Float32Array(16), inv: new THREE.Matrix4() },
     dispose() {
       root.traverse((m) => {
         if (!m.isMesh) return;
@@ -203,7 +205,7 @@ export function stepCloth(sim, M, rawDt) {
     sim.last[j] = e[j];
   }
   if (!moved && sim.asleep) return;
-  const { n, goal, k, c, pos, vel } = sim;
+  const { n, goal, k, c, lag, pos, vel } = sim;
   if (moved) sim.asleep = false;
   if (!sim.ready) {
     for (let i = 0; i < n * 3; i += 3) {
@@ -230,12 +232,13 @@ export function stepCloth(sim, M, rawDt) {
       vel[i + 1] += (4 * kk * dy - 2 * cc * vel[i + 1]) * h;
       vel[i + 2] += (kk * dz - cc * vel[i + 2]) * h;
       pos[i] += vel[i] * h; pos[i + 1] += vel[i + 1] * h; pos[i + 2] += vel[i + 2] * h;
-      // la tela nunca se aleja mucho de su forma colgada
+      // la tela nunca se aleja de su forma colgada más que lag[v] (cero en los hombros: el gancho no la atraviesa)
       const ex = pos[i] - wx, ey = pos[i + 1] - wy, ez = pos[i + 2] - wz;
-      const d2 = ex * ex + ey * ey + ez * ez;
-      if (d2 > 0.0064) {
-        const f = 0.08 / Math.sqrt(d2);
+      const d2 = ex * ex + ey * ey + ez * ez, r = lag[v];
+      if (d2 > r * r) {
+        const f = r / Math.sqrt(d2);
         pos[i] = wx + ex * f; pos[i + 1] = wy + ey * f; pos[i + 2] = wz + ez * f;
+        if (!r) vel[i] = vel[i + 1] = vel[i + 2] = 0;
       }
       energy += dx * dx + dy * dy + dz * dz + vel[i] * vel[i] + vel[i + 1] * vel[i + 1] + vel[i + 2] * vel[i + 2];
     }
