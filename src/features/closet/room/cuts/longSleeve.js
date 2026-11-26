@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import * as tshirt from './tshirt';
 
-const { clamp } = THREE.MathUtils;
+const { clamp, smoothstep } = THREE.MathUtils;
 
 export const label = 'Playera manga larga';
 
@@ -47,7 +47,13 @@ export function pose(ctx) {
       target: SLEEVE_DROP,
       ramp: SHOULDER_RAMP,
       // es manga lo que está sobre la axila o separado del torso (el antebrazo y el puño de la pose "A")
-      isSleeve: (x, y) => y >= sleeveBottom || !inTorso(x, y),
+      // el costado del torso pasa a "manga" de forma gradual alrededor de la axila (8 cm abajo → 4 cm arriba):
+      // un corte brusco ahí doblaba las costillas en escalón al apoyarse la manga
+      isSleeve: (x, y) => {
+        if (!inTorso(x, y)) return 1; // brazo separado del torso (antebrazo, puño)
+        if (Math.abs(x) > hw * 1.12) return y >= sleeveBottom ? 1 : 0; // brazo pegado junto a la axila: como antes
+        return smoothstep(y, sleeveBottom - 0.08, sleeveBottom + 0.04); // costado del torso: transición suave
+      },
     }),
   };
 }
