@@ -19,7 +19,8 @@ function CameraRig({ mode, rail, scroll, motion }) {
     motion.vel = (scroll.cur - prev) / Math.max(dt, 0.001);
 
     const near = mode !== 'overview';
-    const wantPos = near ? railToWorld(rail, scroll.cur, -0.35, 1.6) : new THREE.Vector3(0, 1.65, 0.6);
+    // en detalle la cámara se aleja 30 cm de la barra (la prenda abierta se adelanta lo mismo): deja espacio para el desenfoque
+    const wantPos = near ? railToWorld(rail, scroll.cur, -0.35, mode === 'detail' ? 1.9 : 1.6) : new THREE.Vector3(0, 1.65, 0.6);
     const wantLook = railToWorld(rail, near ? scroll.cur : 0, near ? -0.35 : -0.3, 0);
     if (!pos.current) { pos.current = wantPos.clone(); look.current.copy(wantLook); }
     const k = 1 - Math.exp(-4 * dt);
@@ -29,6 +30,35 @@ function CameraRig({ mode, rail, scroll, motion }) {
     camera.lookAt(look.current);
   });
   return null;
+}
+
+// Vista detalle: un "vidrio esmerilado" entre la prenda y el resto del cuarto. Su transmisión con rugosidad
+// desenfoca lo que hay detrás y lo oscurece un poco, así la prenda sacada resalta sobre el fondo.
+const BACKDROP_DIST = 1.4; // m frente a la cámara: detrás de la prenda abierta (~1.15 m) y delante de las colgadas (las mangas de perfil llegan a ~1.55 m)
+function DetailBackdrop({ active }) {
+  const camera = useThree((s) => s.camera);
+  const mesh = useRef();
+  const k = useRef(0);
+  const dir = useRef(new THREE.Vector3()).current;
+  useFrame((_, dt) => {
+    k.current = THREE.MathUtils.damp(k.current, active ? 1 : 0, 5, dt);
+    const m = mesh.current;
+    m.visible = k.current > 0.01;
+    if (!m.visible) return;
+    camera.getWorldDirection(dir);
+    m.position.copy(camera.position).addScaledVector(dir, BACKDROP_DIST);
+    m.quaternion.copy(camera.quaternion);
+    const hgt = 2.4 * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)) * BACKDROP_DIST;
+    m.scale.set(hgt * camera.aspect, hgt, 1);
+    m.material.roughness = 0.45 * k.current; // desenfoque (se distinguen las formas de atrás, sin detalle)
+    m.material.color.setScalar(1 - 0.35 * k.current); // oscurecido suave (no tanto como Pinterest)
+  });
+  return (
+    <mesh ref={mesh} visible={false} renderOrder={-1}>
+      <planeGeometry />
+      <meshPhysicalMaterial transmission={1} thickness={0} ior={1.5} metalness={0} specularIntensity={0} roughness={0} />
+    </mesh>
+  );
 }
 
 function Room() {
@@ -62,6 +92,7 @@ export default function ClosetRoom({ items, nav, scroll, motion, onSelect, onHov
       <pointLight position={[0, 2.6, -2]} intensity={8} />
       <Room />
       <CameraRig mode={nav.mode} rail={nav.rail} scroll={scroll} motion={motion} />
+      <DetailBackdrop active={nav.mode === 'detail'} />
       {RAILS.map((r, ri) => (
         <group key={ri} position={r.pos} rotation={[0, r.rotY, 0]}>
           <mesh rotation={[0, 0, Math.PI / 2]}>

@@ -35,7 +35,7 @@ function HangingModel({ scene, cut, x, interactive, selected, steps, scroll, mot
     // seleccionada: sale de la barra y se coloca frente a la cámara (que está en scroll.cur)
     p.x = damp(p.x, selected ? scroll.cur : x, 7, dt);
     p.y = damp(p.y, selected ? 0.22 : lifted ? 0.15 : 0, 7, dt);
-    p.z = damp(p.z, selected ? 0.45 : 0, 7, dt);
+    p.z = damp(p.z, selected ? 0.75 : 0, 7, dt); // a 1.15 m de la cámara (que en detalle está a 1.9 m de la barra)
 
     const cur = yaw.current.rotation.y;
     // ángulo objetivo (giro del usuario, o perfil en la barra) tomado en su equivalente más cercano: nunca da vueltas de más

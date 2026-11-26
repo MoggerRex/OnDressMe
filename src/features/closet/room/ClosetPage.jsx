@@ -218,7 +218,7 @@ export default function ClosetPage() {
         )}
         </div>
 
-        <p className="pointer-events-none absolute bottom-4 left-1/2 -translate-x-1/2 rounded-full bg-slate-900/80 px-4 py-2 text-xs text-slate-300">
+        <p className="pointer-events-none absolute bottom-4 left-4 rounded-full bg-slate-900/80 px-4 py-2 text-xs text-slate-300">
           {HINTS[nav.mode]}
         </p>
 
