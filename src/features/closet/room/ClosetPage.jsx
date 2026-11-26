@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Canvas } from '@react-three/fiber';
 import { Search, Shirt, Trash2, Upload } from 'lucide-react';
 import ClosetRoom from './ClosetRoom';
+import { CUTS } from './cuts';
 import { PER_RAIL, RAILS, SPACING, START_RAIL, placeItems, railRange } from './layout';
 
 const HINTS = {
@@ -16,11 +17,12 @@ const clamp = (v, [a, b]) => Math.min(b, Math.max(a, v));
 // Pregunta el nombre con el que se guardará la prenda.
 function NamePrompt({ file, onSave, onCancel }) {
   const [name, setName] = useState(file.name.replace(/\.[^.]+$/, ''));
+  const [cut, setCut] = useState(/larga|long/i.test(file.name) ? 'longSleeve' : 'tshirt');
   return (
     <div className="absolute inset-0 z-20 flex items-center justify-center bg-slate-950/70">
       <form
         className="w-80 rounded-xl border border-slate-700 bg-slate-900 p-5"
-        onSubmit={(e) => { e.preventDefault(); onSave(name.trim() || file.name); }}
+        onSubmit={(e) => { e.preventDefault(); onSave(name.trim() || file.name, cut); }}
         onKeyDown={(e) => { if (e.key === 'Escape') onCancel(); }}
       >
         <h3 className="font-semibold">¿Cómo se llama esta prenda?</h3>
@@ -32,6 +34,16 @@ function NamePrompt({ file, onSave, onCancel }) {
           onFocus={(e) => e.target.select()}
           className="mt-3 w-full rounded-lg border border-slate-700 bg-slate-800 px-3 py-2 text-sm outline-none focus:border-violet-500"
         />
+        <label className="mt-3 block text-xs text-slate-400">
+          Tipo de prenda
+          <select
+            value={cut}
+            onChange={(e) => setCut(e.target.value)}
+            className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-800 px-3 py-2 text-sm text-slate-100 outline-none focus:border-violet-500"
+          >
+            {Object.entries(CUTS).map(([key, c]) => <option key={key} value={key}>{c.label}</option>)}
+          </select>
+        </label>
         <div className="mt-4 flex justify-end gap-2 text-sm">
           <button type="button" onClick={onCancel} className="rounded-lg px-3 py-2 text-slate-300 hover:bg-slate-800">Cancelar</button>
           <button type="submit" className="rounded-lg bg-violet-600 px-4 py-2 font-semibold hover:bg-violet-500">Guardar</button>
@@ -54,9 +66,9 @@ export default function ClosetPage() {
   const placed = placeItems(items);
   live.current = { nav, range: railRange(placed, nav.rail) };
 
-  function savePending(name) {
+  function savePending(name, cut) {
     const f = pending[0];
-    setItems((cur) => [...cur, { id: crypto.randomUUID(), name, ext: f.name.slice(-3).toLowerCase(), size: f.size, url: URL.createObjectURL(f) }]);
+    setItems((cur) => [...cur, { id: crypto.randomUUID(), name, cut, ext: f.name.slice(-3).toLowerCase(), size: f.size, url: URL.createObjectURL(f) }]);
     setPending((cur) => cur.slice(1));
   }
 
@@ -196,6 +208,7 @@ export default function ClosetPage() {
             <h2 className="mb-3 text-xs font-semibold uppercase tracking-wide text-slate-400">Datos de la prenda</h2>
             <p className="break-words text-lg font-semibold">{shown.name}</p>
             <dl className="mt-3 grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5 text-sm">
+              <dt className="text-slate-400">Tipo</dt><dd>{CUTS[shown.cut]?.label}</dd>
               <dt className="text-slate-400">Formato</dt><dd>{shown.ext.toUpperCase()}</dd>
               <dt className="text-slate-400">Tamaño</dt><dd>{(shown.size / 1048576).toFixed(2)} MB</dd>
               <dt className="text-slate-400">Barra</dt><dd>{RAIL_NAMES[placed[shownIdx].rail]}</dd>

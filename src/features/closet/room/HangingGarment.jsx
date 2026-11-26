@@ -17,7 +17,7 @@ class SkipOnError extends Component {
 }
 
 // Jerarquía: place (posición en la barra / sacada) > pivot (balanceo del gancho) > yaw (perfil / giro) > gancho + tela
-function HangingModel({ scene, x, interactive, selected, steps, scroll, motion, onSelect, onHover }) {
+function HangingModel({ scene, cut, x, interactive, selected, steps, scroll, motion, onSelect, onHover }) {
   const place = useRef();
   const pivot = useRef();
   const yaw = useRef();
@@ -25,7 +25,7 @@ function HangingModel({ scene, x, interactive, selected, steps, scroll, motion, 
   const [hovered, setHovered] = useState(false);
   useCursor(hovered && interactive);
 
-  const cloth = useMemo(() => buildGarment(scene), [scene]);
+  const cloth = useMemo(() => buildGarment(scene, cut), [scene, cut]);
   useEffect(() => () => cloth.dispose(), [cloth]);
 
   useFrame((_, rawDt) => {
@@ -85,7 +85,7 @@ export default function HangingGarment({ item, onError, onSelect, onHover, ...re
   return (
     <SkipOnError onError={() => onError(item.id)}>
       <Suspense fallback={null}>
-        <Loader url={item.url} onSelect={() => onSelect(item.id)} onHover={(on) => onHover(on ? item.id : null)} {...rest} />
+        <Loader url={item.url} cut={item.cut} onSelect={() => onSelect(item.id)} onHover={(on) => onHover(on ? item.id : null)} {...rest} />
       </Suspense>
     </SkipOnError>
   );
