@@ -11,6 +11,9 @@ export const label = 'Playera manga larga';
 // ángulo de caída de la manga (rad bajo la horizontal): más cerrado que en manga corta (1.23), porque una manga larga
 // colgada cae casi pegada al costado; así también la unión con la axila queda más arriba
 const SLEEVE_DROP = 1.34;
+// zona del hombro donde la tela pasa de torso a manga (en múltiplos del medio ancho del torso). Más ancha = hombro
+// más redondo y más afuera; la manga corta usa [0.98, 1.3]
+const SHOULDER_RAMP = [0.85, 1.55];
 
 export function pose(ctx) {
   const { each, h, top } = ctx;
@@ -42,6 +45,7 @@ export function pose(ctx) {
       hw: hw || undefined,
       sleeveBottom,
       target: SLEEVE_DROP,
+      ramp: SHOULDER_RAMP,
       // es manga lo que está sobre la axila o separado del torso (el antebrazo y el puño de la pose "A")
       isSleeve: (x, y) => y >= sleeveBottom || !inTorso(x, y),
     }),

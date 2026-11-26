@@ -44,8 +44,10 @@ export function pose({ parts, each, h, top }, fit = {}) {
       let x = p.getX(i), y = p.getY(i);
       const w = smoothstep(Math.abs(x), hw * 0.98, hw * 1.3);
       if (w > 0 && isSleeve(x, y)) side[o / 3] = (x < 0 ? -1 : 1) * smoothstep(w, 0, 0.5);
-      if (theta && w) {
-        const sg = x < 0 ? -1 : 1, f = -sg * theta * w, cs = Math.cos(f), sn = Math.sin(f);
+      // cuánto gira cada punto: 0 en el torso, 1 en la manga. `fit.ramp` ensancha esa transición (hombro más redondo)
+      const rw = fit.ramp ? (isSleeve(x, y) ? smoothstep(Math.abs(x), hw * fit.ramp[0], hw * fit.ramp[1]) : 0) : w;
+      if (theta && rw) {
+        const sg = x < 0 ? -1 : 1, f = -sg * theta * rw, cs = Math.cos(f), sn = Math.sin(f);
         const dx = x - sg * px, dy = y - py;
         x = sg * px + dx * cs - dy * sn;
         y = py + dx * sn + dy * cs;
