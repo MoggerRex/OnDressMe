@@ -475,7 +475,25 @@ button:focus-visible, a:focus-visible { outline: 2px solid var(--app-accent); ou
 .panel-heading h1, .closet-heading h2, .recommendation-copy h2 { margin: 5px 0 0; color: #f6f5f4; font-family: 'Carrois Gothic', sans-serif; font-size: 20px; font-weight: 500; line-height: 1.2; }
 .icon-button { width: 33px; height: 33px; display: grid; place-items: center; border: 1px solid var(--app-line); background: var(--app-surface-raised); color: var(--app-ink); cursor: pointer; }
 .icon-button:hover { color: var(--app-ink-strong); border-color: var(--app-accent); }
-.avatar-stage { position: relative; height: clamp(350px, 40vw, 405px); overflow: hidden; background: linear-gradient(180deg, var(--stage-top) 0%, var(--stage-middle) 70%, var(--stage-floor) 100%); transition: background 420ms ease; }
+@property --stage-top {
+  syntax: '<color>';
+  inherits: true;
+  initial-value: #9b603f;
+}
+
+@property --stage-middle {
+  syntax: '<color>';
+  inherits: true;
+  initial-value: #7b4b37;
+}
+
+@property --stage-floor {
+  syntax: '<color>';
+  inherits: true;
+  initial-value: #d2a17a;
+}
+
+.avatar-stage { position: relative; height: clamp(350px, 40vw, 405px); overflow: hidden; background: linear-gradient(180deg, var(--stage-top) 0%, var(--stage-middle) 70%, var(--stage-floor) 100%); transition: --stage-top 700ms ease, --stage-middle 700ms ease, --stage-floor 700ms ease; }
 .avatar-stage > .mannequin-viewer { position: absolute; inset: 0; }
 .mannequin-viewer canvas { position: absolute !important; z-index: 1; inset: 0; }
 .avatar-stage.has-outfit-slots .height-markers { display: none; }

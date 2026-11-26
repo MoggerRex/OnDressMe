@@ -20,7 +20,7 @@ import MannequinCanvas from '../features/mannequin/MannequinScene.jsx';
 import OnboardingModal from '../features/onboarding/OnboardingModal.jsx';
 import '../App.css';
 
-const categories = ['Tops', 'Bottoms', 'Accessories', 'Shoes', 'Hats'];
+const categories = ['Hats', 'Accessories','Tops', 'Bottoms', 'Shoes'];
 const themeOptions = [
 	{ value: 'noir', label: 'Noir' },
 	{ value: 'light', label: 'Porcelain' },
@@ -612,7 +612,7 @@ export default function Main() {
 								<div className={activeView === 'DressMe' ? 'panel-heading dressing-room-heading' : 'panel-heading'}>
 									<div>
 										{activeView !== 'DressMe' && <span className="eyebrow">Dressing room</span>}
-										<h1 id="simulator-title">{activeView === 'Avatar' ? 'Your avatar' : 'Your mannequin'}</h1>
+										<h1 id="simulator-title">{activeView === 'Avatar' ? 'Your avatar' : ''}</h1>
 									</div>
 									{activeView !== 'DressMe' && (
 										<button className="icon-button" type="button" title="Expand viewer" aria-label="Expand viewer">
@@ -690,8 +690,7 @@ export default function Main() {
 								{activeView === 'DressMe' && (
 									<div className="dressing-room-footer">
 										<div className="dressing-room-footer-copy">
-											<span className="eyebrow">Current selection</span>
-											<strong>{selectedItems[visibleItems[0]?.type]?.name || 'Choose an item'}</strong>
+										
 										</div>
 									</div>
 								)}
