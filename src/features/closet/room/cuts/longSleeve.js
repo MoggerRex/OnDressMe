@@ -5,10 +5,12 @@ const { clamp } = THREE.MathUtils;
 
 export const label = 'Playera manga larga';
 
-// Playera de manga larga: cuelga EXACTAMENTE igual que la de manga corta (mismo giro de mangas sobre el hombro,
-// mismo ángulo de caída, misma física). Solo cambia cómo se mide la prenda: los modelos de manga larga suelen venir
+// Playera de manga larga: cuelga igual que la de manga corta (mismo giro de mangas sobre el hombro y misma física),
+// con la manga más cerrada hacia el cuerpo. Solo cambia cómo se mide la prenda: los modelos de manga larga suelen venir
 // en pose "A", con los puños tan abajo como el dobladillo, y medir el torso "a lo bruto" los confundiría con torso.
-const SHORT_SLEEVE_DROP = 1.23; // ángulo de caída (rad bajo la horizontal) que obtiene la manga corta de referencia
+// ángulo de caída de la manga (rad bajo la horizontal): más cerrado que en manga corta (1.23), porque una manga larga
+// colgada cae casi pegada al costado; así también la unión con la axila queda más arriba
+const SLEEVE_DROP = 1.42;
 
 export function pose(ctx) {
   const { each, h, top } = ctx;
@@ -39,7 +41,7 @@ export function pose(ctx) {
     ...tshirt.pose(ctx, {
       hw: hw || undefined,
       sleeveBottom,
-      target: SHORT_SLEEVE_DROP,
+      target: SLEEVE_DROP,
       // es manga lo que está sobre la axila o separado del torso (el antebrazo y el puño de la pose "A")
       isSleeve: (x, y) => y >= sleeveBottom || !inTorso(x, y),
     }),
