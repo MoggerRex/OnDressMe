@@ -170,11 +170,12 @@ export function buildGarment(scene) {
     k[i] = lerp(900, 80, Math.pow(l, 0.7));
     // arriba (hombros) casi rígido y sobreamortiguado; abajo y en mangas algo subamortiguado: se mueve natural y se asienta en ~1 s
     cd[i] = 2 * Math.sqrt(k[i]) * lerp(1.6, 0.55, l);
-    // retraso máximo permitido: 0 sobre los brazos del gancho (la tela va pegada a ellos al mover o girar la prenda), hasta 8 cm abajo
-    lag[i] = 0.08 * smoothstep(d, 0.04, 0.2);
+    // retraso máximo permitido: 0 sobre los brazos del gancho (la tela va pegada a ellos al mover o girar la prenda), hasta 5 cm abajo
+    // retraso que crece despacio hacia el dobladillo: un gradiente brusco (hombro fijo / costillas sueltas) estira el torso al girar
+    lag[i] = 0.05 * smoothstep(d, 0.06, 0.45);
     // en la axila se unen manga y torso: si cada una se retrasa distinto la malla se estira al girar, así que ahí se mueven juntas
-    const ap = 1 - smoothstep(Math.hypot(Math.abs(x) - hw, y - sleeveBottom), 0.03, 0.15);
-    lag[i] *= 1 - 0.85 * ap;
+    const ap = 1 - smoothstep(Math.hypot(Math.abs(x) - hw, y - sleeveBottom), 0.05, 0.25);
+    lag[i] *= 1 - 0.6 * ap;
   }
 
   const root = new THREE.Group();
