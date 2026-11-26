@@ -98,14 +98,15 @@ export function buildGarment(scene) {
 
   const total = parts.reduce((a, { geo }) => a + geo.attributes.position.count, 0);
   const goal = new Float32Array(total * 3);
-  const side = new Int8Array(total); // -1/1: vértice de manga izquierda/derecha; 0: torso
+  // peso de manga con signo (-1..1): 0 en torso; sube suave desde la axila para que la unión manga-torso no se estire
+  const side = new Float32Array(total);
   let o = 0;
   parts.forEach(({ geo }) => {
     const p = geo.attributes.position, nr = geo.attributes.normal;
     for (let i = 0; i < p.count; i++, o += 3) {
       let x = p.getX(i), y = p.getY(i);
       const w = smoothstep(Math.abs(x), hw * 0.98, hw * 1.3);
-      if (w > 0 && y >= sleeveBottom) side[o / 3] = x < 0 ? -1 : 1;
+      if (w > 0 && y >= sleeveBottom) side[o / 3] = (x < 0 ? -1 : 1) * smoothstep(w, 0, 0.5);
       if (theta && w) {
         const sg = x < 0 ? -1 : 1, f = -sg * theta * w, cs = Math.cos(f), sn = Math.sin(f);
         const dx = x - sg * px, dy = y - py;
@@ -152,6 +153,9 @@ export function buildGarment(scene) {
     bodyW[bi] = Math.max(bodyW[bi], Math.abs(goal[v * 3]));
     zLo[bi] = Math.min(zLo[bi], goal[v * 3 + 2]); zHi[bi] = Math.max(zHi[bi], goal[v * 3 + 2]);
   }
+  // contorno suave: sin escalones entre franjas (producían picos en la axila al girar)
+  const raw = bodyW.slice();
+  for (let bi = 0; bi < nb; bi++) bodyW[bi] = Math.max(raw[Math.max(0, bi - 1)], raw[bi], raw[Math.min(nb - 1, bi + 1)]);
   const collider = { side, bodyW, zLo, zHi, nb, bin: BIN };
 
   // Rigidez por vértice: pegada al gancho en la línea de hombros, floja hacia abajo y en las puntas de manga
@@ -168,6 +172,9 @@ export function buildGarment(scene) {
     cd[i] = 2 * Math.sqrt(k[i]) * lerp(1.6, 0.55, l);
     // retraso máximo permitido: 0 sobre los brazos del gancho (la tela va pegada a ellos al mover o girar la prenda), hasta 8 cm abajo
     lag[i] = 0.08 * smoothstep(d, 0.04, 0.2);
+    // en la axila se unen manga y torso: si cada una se retrasa distinto la malla se estira al girar, así que ahí se mueven juntas
+    const ap = 1 - smoothstep(Math.hypot(Math.abs(x) - hw, y - sleeveBottom), 0.03, 0.15);
+    lag[i] *= 1 - 0.85 * ap;
   }
 
   const root = new THREE.Group();
@@ -212,11 +219,15 @@ function writeLocal(sim, M) {
       let lx = e[0] * x + e[4] * y + e[8] * z + e[12];
       const ly = e[1] * x + e[5] * y + e[9] * z + e[13];
       const lz = e[2] * x + e[6] * y + e[10] * z + e[14];
-      const sg = side[start + j];
-      if (sg) {
-        const bi = Math.floor((SHIRT_TOP - ly) / bin);
-        if (bi >= 0 && bi < nb && bodyW[bi] > 0 && lz > zLo[bi] - 0.01 && lz < zHi[bi] + 0.01 && sg * lx < bodyW[bi] + 0.006) {
-          lx = sg * (bodyW[bi] + 0.006); // la manga se apoya sobre el torso en vez de atravesarlo
+      const sw = side[start + j];
+      if (sw) {
+        const fb = (SHIRT_TOP - ly) / bin - 0.5, b0 = Math.floor(fb), t = fb - b0;
+        const bi = Math.round(fb);
+        if (b0 >= 0 && b0 + 1 < nb && bodyW[b0] > 0 && bodyW[b0 + 1] > 0 && lz > zLo[bi] - 0.01 && lz < zHi[bi] + 0.01) {
+          const sg = sw < 0 ? -1 : 1;
+          const wall = bodyW[b0] + (bodyW[b0 + 1] - bodyW[b0]) * t + 0.006;
+          // la manga se apoya sobre el torso en vez de atravesarlo (proporcional al peso de manga: transición suave)
+          if (sg * lx < wall) lx += sg * (wall - sg * lx) * Math.abs(sw);
         }
       }
       a[j * 3] = lx; a[j * 3 + 1] = ly; a[j * 3 + 2] = lz;
