@@ -5,6 +5,7 @@ export const SHIRT_TOP = -0.13; // parte más alta de la prenda, medida desde la
 const { smoothstep, lerp, clamp } = THREE.MathUtils;
 // Gancho de tamaño fijo, igual para todas las prendas (medido sobre la camisa de manga corta de referencia)
 const TIP_X = 0.115, TIP_Y = -0.177, NECK_Y = -0.127;
+const FLARE = 0.1; // manga larga: leve apertura hacia afuera al bajar (~6°), como cuelga una manga real
 
 function segDist(px, py, ax, ay, bx, by) {
   const dx = bx - ax, dy = by - ay;
@@ -131,10 +132,10 @@ export function buildGarment(scene) {
       for (let r = 0; r < nRows; r++) if (hi[r] > lo[r]) { hs += (hi[r] - lo[r]) / 2; hn++; }
       const a0 = Math.atan2(py - C[1], C[0] - hw);
       const radius = (hn ? hs / hn : 0.05) * Math.sin(a0);
-      const S = [hw + radius + 0.01, py]; // la manga cuelga justo junto al costado, redonda (sin aplastarse contra el torso)
+      const S = [hw + 0.35 * radius, py]; // la manga nace en la orilla del hombro: su borde exterior sigue la línea del hombro
       const ax = C[0] - S[0], ay = C[1] - S[1];
       const alpha = Math.atan2(S[1] - C[1], C[0] - S[0]); // ángulo actual bajo la horizontal
-      arm[sg] = { S, ax, ay, len2: ax * ax + ay * ay || 1, rotA: Math.max(0, Math.PI / 2 - 0.03 - alpha) };
+      arm[sg] = { S, ax, ay, len2: ax * ax + ay * ay || 1, rotA: Math.max(0, Math.PI / 2 - FLARE - alpha) };
     }
   }
 
@@ -152,7 +153,10 @@ export function buildGarment(scene) {
       if (aPose && side[o / 3]) {
         const sg = x < 0 ? -1 : 1, A = arm[sg];
         const t = ((sg * x - A.S[0]) * A.ax + (y - A.S[1]) * A.ay) / A.len2;
-        const f = -sg * A.rotA * smoothstep(t, -0.03, 0.12), cs = Math.cos(f), sn = Math.sin(f);
+        // hombro: el giro entra gradual a lo largo de la parte alta del brazo: la manga sale del hombro con su inclinación
+        // y se va curvando hasta quedar vertical, así el hombro cae en curva redondeada hacia afuera (sin hundirse)
+        const blendIn = Math.max(Math.abs(side[o / 3]), smoothstep(t, 0.1, 0.3));
+        const f = -sg * A.rotA * smoothstep(t, -0.1, 0.35) * blendIn, cs = Math.cos(f), sn = Math.sin(f);
         const dx = x - sg * A.S[0], dy = y - A.S[1];
         x = sg * A.S[0] + dx * cs - dy * sn;
         y = A.S[1] + dx * sn + dy * cs;
@@ -188,7 +192,7 @@ export function buildGarment(scene) {
       for (let r = 0; r < nRows; r++) {
         let sum = 0, cnt = 0;
         for (let j = Math.max(0, r - 2); j <= Math.min(nRows - 1, r + 2); j++) {
-          if (hi[j] > lo[j]) { sum += arm[sg].S[0] - (hi[j] + lo[j]) / 2; cnt++; }
+          if (hi[j] > lo[j]) { sum += arm[sg].S[0] + (arm[sg].S[1] - (SHIRT_TOP - (j + 0.5) * RB)) * Math.tan(FLARE) - (hi[j] + lo[j]) / 2; cnt++; }
         }
         shift[r] = cnt ? sum / cnt : 0;
       }
@@ -197,6 +201,7 @@ export function buildGarment(scene) {
         const y = goal[v * 3 + 1];
         goal[v * 3] += sg * shift[rowOf(y)] * Math.abs(side[v]) * smoothstep(arm[sg].S[1] - 0.05 - y, 0, 0.15);
       }
+
     }
   }
 
