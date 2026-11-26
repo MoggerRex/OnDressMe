@@ -10,7 +10,7 @@ export const label = 'Playera manga larga';
 // en pose "A", con los puños tan abajo como el dobladillo, y medir el torso "a lo bruto" los confundiría con torso.
 // ángulo de caída de la manga (rad bajo la horizontal): más cerrado que en manga corta (1.23), porque una manga larga
 // colgada cae casi pegada al costado; así también la unión con la axila queda más arriba
-const SLEEVE_DROP = 1.42;
+const SLEEVE_DROP = 1.34;
 
 export function pose(ctx) {
   const { each, h, top } = ctx;
