@@ -156,7 +156,7 @@ export function buildGarment(scene) {
         // hombro: el giro entra gradual a lo largo de la parte alta del brazo: la manga sale del hombro con su inclinación
         // y se va curvando hasta quedar vertical, así el hombro cae en curva redondeada hacia afuera (sin hundirse)
         const blendIn = Math.max(Math.abs(side[o / 3]), smoothstep(t, 0.1, 0.3));
-        const f = -sg * A.rotA * smoothstep(t, -0.1, 0.35) * blendIn, cs = Math.cos(f), sn = Math.sin(f);
+        const f = -sg * A.rotA * smoothstep(t, -0.1, 0.45) * blendIn, cs = Math.cos(f), sn = Math.sin(f);
         const dx = x - sg * A.S[0], dy = y - A.S[1];
         x = sg * A.S[0] + dx * cs - dy * sn;
         y = A.S[1] + dx * sn + dy * cs;
@@ -199,7 +199,7 @@ export function buildGarment(scene) {
       for (let v = 0; v < total; v++) {
         if (side[v] * sg <= 0) continue;
         const y = goal[v * 3 + 1];
-        goal[v * 3] += sg * shift[rowOf(y)] * Math.abs(side[v]) * smoothstep(arm[sg].S[1] - 0.05 - y, 0, 0.15);
+        goal[v * 3] += sg * shift[rowOf(y)] * Math.abs(side[v]) * smoothstep(arm[sg].S[1] - y, 0.12, 0.35); // el enderezado empieza bajo el hombro: arriba queda la curva redondeada
       }
 
     }
