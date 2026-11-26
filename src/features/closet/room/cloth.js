@@ -3,6 +3,8 @@ import * as THREE from 'three';
 export const TARGET_HEIGHT = 0.8; // metros
 export const SHIRT_TOP = -0.13; // parte más alta de la prenda, medida desde la barra (origen)
 const { smoothstep, lerp, clamp } = THREE.MathUtils;
+// Gancho de tamaño fijo, igual para todas las prendas (medido sobre la camisa de manga corta de referencia)
+const TIP_X = 0.115, TIP_Y = -0.177, NECK_Y = -0.127;
 
 function segDist(px, py, ax, ay, bx, by) {
   const dx = bx - ax, dy = by - ay;
@@ -32,11 +34,6 @@ function buildHanger(tipX, tipY, neckY) {
   const R = new THREE.Vector3(tipX, tipY, 0);
   const L = new THREE.Vector3(-tipX, tipY, 0);
   [[N, R], [N, L], [L, R]].forEach(([a, b]) => g.add(segment(a, b, 0.005, mat)));
-  [R, L].forEach((p) => {
-    const s = new THREE.Mesh(new THREE.SphereGeometry(0.009, 8, 6), mat);
-    s.position.copy(p);
-    g.add(s);
-  });
   return g;
 }
 
@@ -71,10 +68,21 @@ export function buildGarment(scene) {
     for (let i = 0; i < p.count; i++) fn(p.getX(i), p.getY(i), p.getZ(i));
   });
 
-  // Medidas: ancho del cuerpo (mitad inferior) y largo de manga
+  // Torso por franjas de 2 cm: el tramo continuo de tela alrededor del centro (|x| sin huecos de 8 cm o más).
+  // Así los puños de una manga larga, que pueden llegar tan abajo como el dobladillo, no cuentan como torso.
+  const RB = 0.02, nRows = Math.ceil(h / RB) + 2;
+  const rowOf = (y) => clamp(Math.floor((SHIRT_TOP - y) / RB), 0, nRows - 1);
+  const occ = Array.from({ length: nRows }, () => new Set());
+  each((x, y) => occ[rowOf(y)].add(Math.floor(Math.abs(x) / 0.01)));
+  const runEnd = occ.map((set) => { let i = 0, gap = 0; while (gap < 8 && i < 400) { gap = set.has(i) ? 0 : gap + 1; i++; } return (i - gap) * 0.01; });
+  const inTorso = (x, y) => Math.abs(x) < runEnd[rowOf(y)];
+  const rowExt = new Float32Array(nRows);
   let hw = 0, maxX = 0;
   each((x, y) => {
     maxX = Math.max(maxX, Math.abs(x));
+    if (!inTorso(x, y)) return;
+    const r = rowOf(y);
+    rowExt[r] = Math.max(rowExt[r], Math.abs(x));
     if (y < SHIRT_TOP - 0.65 * h) hw = Math.max(hw, Math.abs(x));
   });
   hw = hw || maxX;
@@ -91,10 +99,44 @@ export function buildGarment(scene) {
     theta = Math.max(0, target - slope);
   }
 
-  // Bajo de la manga (axila) en la pose original: por debajo de ahí todo es torso (costillas, cintura, dobladillo)
-  let sleeveBottom = Infinity;
-  each((x, y) => { if (Math.abs(x) > hw * 1.15) sleeveBottom = Math.min(sleeveBottom, y); });
-  sleeveBottom -= 0.01;
+  // Axila en la pose original: bajando desde arriba, tras pasar por la zona ancha (hombros + mangas pegadas),
+  // la primera franja que vuelve al ancho del torso. Por debajo, solo es manga lo que está separado del torso.
+  let sleeveBottom = Infinity, wide = false;
+  for (let r = 0; r < nRows; r++) {
+    if (rowExt[r] > hw * 1.15) wide = true;
+    else if (wide && rowExt[r] > 0 && rowExt[r] <= hw * 1.1) { sleeveBottom = SHIRT_TOP - r * RB - 0.01; break; }
+  }
+
+  // Pose "A" (mangas ya inclinadas hacia abajo, p. ej. manga larga): el brazo sale del torso bajo la axila.
+  // El brazo entero gira casi rígido sobre el borde del hombro hasta quedar vertical, pegado al costado:
+  // la orilla exterior de la manga baja recta desde el hombro (sin abultarse ni inclinarse hacia adentro).
+  let below = 0;
+  each((x, y) => { if (!inTorso(x, y) && smoothstep(Math.abs(x), hw * 0.98, hw * 1.3) > 0.25 && y < sleeveBottom - 0.1) below++; });
+  const aPose = below > 50;
+  const arm = {};
+  if (aPose) {
+    theta = 0;
+    for (const sg of [1, -1]) {
+      let cx = 0, cy = 0, n = 0;
+      each((x, y) => { if (sg * x > 0.92 * maxX) { cx += sg * x; cy += y; n++; } });
+      const C = [cx / n, cy / n];
+      // grosor del brazo: medio ancho horizontal de sus franjas (separadas del torso) corregido por la inclinación
+      const lo = new Float32Array(nRows).fill(Infinity), hi = new Float32Array(nRows).fill(-Infinity);
+      each((x, y) => {
+        if (sg * x <= 0 || inTorso(x, y)) return;
+        const r = rowOf(y);
+        lo[r] = Math.min(lo[r], sg * x); hi[r] = Math.max(hi[r], sg * x);
+      });
+      let hs = 0, hn = 0;
+      for (let r = 0; r < nRows; r++) if (hi[r] > lo[r]) { hs += (hi[r] - lo[r]) / 2; hn++; }
+      const a0 = Math.atan2(py - C[1], C[0] - hw);
+      const radius = (hn ? hs / hn : 0.05) * Math.sin(a0);
+      const S = [hw + radius + 0.01, py]; // la manga cuelga justo junto al costado, redonda (sin aplastarse contra el torso)
+      const ax = C[0] - S[0], ay = C[1] - S[1];
+      const alpha = Math.atan2(S[1] - C[1], C[0] - S[0]); // ángulo actual bajo la horizontal
+      arm[sg] = { S, ax, ay, len2: ax * ax + ay * ay || 1, rotA: Math.max(0, Math.PI / 2 - 0.03 - alpha) };
+    }
+  }
 
   const total = parts.reduce((a, { geo }) => a + geo.attributes.position.count, 0);
   const goal = new Float32Array(total * 3);
@@ -106,7 +148,18 @@ export function buildGarment(scene) {
     for (let i = 0; i < p.count; i++, o += 3) {
       let x = p.getX(i), y = p.getY(i);
       const w = smoothstep(Math.abs(x), hw * 0.98, hw * 1.3);
-      if (w > 0 && y >= sleeveBottom) side[o / 3] = (x < 0 ? -1 : 1) * smoothstep(w, 0, 0.5);
+      if (w > 0 && (y >= sleeveBottom || !inTorso(x, y))) side[o / 3] = (x < 0 ? -1 : 1) * smoothstep(w, 0, 0.5);
+      if (aPose && side[o / 3]) {
+        const sg = x < 0 ? -1 : 1, A = arm[sg];
+        const t = ((sg * x - A.S[0]) * A.ax + (y - A.S[1]) * A.ay) / A.len2;
+        const f = -sg * A.rotA * smoothstep(t, -0.03, 0.12), cs = Math.cos(f), sn = Math.sin(f);
+        const dx = x - sg * A.S[0], dy = y - A.S[1];
+        x = sg * A.S[0] + dx * cs - dy * sn;
+        y = A.S[1] + dx * sn + dy * cs;
+        const nx = nr.getX(i), ny = nr.getY(i);
+        nr.setXY(i, nx * cs - ny * sn, nx * sn + ny * cs);
+        p.setXY(i, x, y);
+      }
       if (theta && w) {
         const sg = x < 0 ? -1 : 1, f = -sg * theta * w, cs = Math.cos(f), sn = Math.sin(f);
         const dx = x - sg * px, dy = y - py;
@@ -121,16 +174,46 @@ export function buildGarment(scene) {
     nr.needsUpdate = true;
   });
 
-  // Gancho: puntas en los hombros (70% del ancho), cuello arriba al centro
-  const tipX = 0.55 * hw;
-  let tipY = SHIRT_TOP - 0.03;
+  // Pose "A": el brazo del modelo viene algo curvado; tras girarlo, cada franja de la manga se centra bajo el hombro
+  // para que caiga recta hasta el puño (sin que la muñeca se doble hacia adentro)
+  if (aPose) {
+    for (const sg of [1, -1]) {
+      const lo = new Float32Array(nRows).fill(Infinity), hi = new Float32Array(nRows).fill(-Infinity);
+      for (let v = 0; v < total; v++) {
+        if (side[v] * sg < 0.5 || goal[v * 3 + 1] > arm[sg].S[1] - 0.05) continue;
+        const r = rowOf(goal[v * 3 + 1]);
+        lo[r] = Math.min(lo[r], sg * goal[v * 3]); hi[r] = Math.max(hi[r], sg * goal[v * 3]);
+      }
+      const shift = new Float32Array(nRows);
+      for (let r = 0; r < nRows; r++) {
+        let sum = 0, cnt = 0;
+        for (let j = Math.max(0, r - 2); j <= Math.min(nRows - 1, r + 2); j++) {
+          if (hi[j] > lo[j]) { sum += arm[sg].S[0] - (hi[j] + lo[j]) / 2; cnt++; }
+        }
+        shift[r] = cnt ? sum / cnt : 0;
+      }
+      for (let v = 0; v < total; v++) {
+        if (side[v] * sg <= 0) continue;
+        const y = goal[v * 3 + 1];
+        goal[v * 3] += sg * shift[rowOf(y)] * Math.abs(side[v]) * smoothstep(arm[sg].S[1] - 0.05 - y, 0, 0.15);
+      }
+    }
+  }
+
+  // Gancho fijo: se sube/baja la prenda para que sus hombros queden 4.5 cm sobre las puntas del gancho
+  // (el gancho va DENTRO de la prenda; solo el cuello asoma por el cuello de la camisa)
+  const tipX = TIP_X, tipY = TIP_Y, neckY = NECK_Y;
   let top = -Infinity;
   for (let i = 0; i < total; i++) {
     if (Math.abs(Math.abs(goal[i * 3]) - tipX) < 0.03) top = Math.max(top, goal[i * 3 + 1]);
   }
-  // El gancho va DENTRO de la prenda: la tela de los hombros cae sobre los brazos y solo el cuello asoma por el cuello de la camisa
-  if (top > -Infinity) tipY = top - 0.045;
-  const neckY = tipY + 0.05;
+  const dy = top > -Infinity ? tipY + 0.045 - top : 0;
+  if (dy) {
+    for (let i = 1; i < total * 3; i += 3) goal[i] += dy;
+    parts.forEach(({ geo }) => geo.translate(0, dy, 0));
+  }
+  const yTop = SHIRT_TOP + dy;
+  sleeveBottom += dy;
   // Centro (en profundidad) del grosor de los hombros: es donde debe quedar el gancho, no el centro de la caja del modelo
   let zMin = Infinity, zMax = -Infinity;
   for (let i = 0; i < total; i++) {
@@ -149,14 +232,26 @@ export function buildGarment(scene) {
   const zLo = new Float32Array(nb).fill(Infinity), zHi = new Float32Array(nb).fill(-Infinity);
   for (let v = 0; v < total; v++) {
     if (side[v]) continue;
-    const bi = clamp(Math.floor((SHIRT_TOP - goal[v * 3 + 1]) / BIN), 0, nb - 1);
+    const bi = clamp(Math.floor((yTop - goal[v * 3 + 1]) / BIN), 0, nb - 1);
     bodyW[bi] = Math.max(bodyW[bi], Math.abs(goal[v * 3]));
     zLo[bi] = Math.min(zLo[bi], goal[v * 3 + 2]); zHi[bi] = Math.max(zHi[bi], goal[v * 3 + 2]);
   }
   // contorno suave: sin escalones entre franjas (producían picos en la axila al girar)
   const raw = bodyW.slice();
   for (let bi = 0; bi < nb; bi++) bodyW[bi] = Math.max(raw[Math.max(0, bi - 1)], raw[bi], raw[Math.min(nb - 1, bi + 1)]);
-  const collider = { side, bodyW, zLo, zHi, nb, bin: BIN };
+  // Manga apoyada en reposo: la manga entera se desplaza hacia afuera (como un bloque, sin doblarse) lo justo
+  // para que ninguna parte entre al torso. Desplazar por franjas doblaba hombros y puños.
+  for (const sg of aPose ? [] : [1, -1]) { // en pose "A" la manga ya cuelga en su sitio: solo el choque fino al dibujar
+    let need = 0;
+    for (let v = 0; v < total; v++) {
+      if (side[v] * sg < 0.5) continue;
+      const bi = clamp(Math.floor((yTop - goal[v * 3 + 1]) / BIN), 0, nb - 1);
+      const z = goal[v * 3 + 2];
+      if (bodyW[bi] > 0 && z > zLo[bi] - 0.01 && z < zHi[bi] + 0.01) need = Math.max(need, bodyW[bi] + 0.015 - sg * goal[v * 3]);
+    }
+    for (let v = 0; v < total; v++) if (side[v] * sg > 0) goal[v * 3] += sg * need * Math.abs(side[v]);
+  }
+  const collider = { side, bodyW, zLo, zHi, nb, bin: BIN, top: yTop };
 
   // Rigidez por vértice: pegada al gancho en la línea de hombros, floja hacia abajo y en las puntas de manga
   const k = new Float32Array(total), cd = new Float32Array(total), lag = new Float32Array(total);
@@ -212,7 +307,7 @@ export function buildGarment(scene) {
 function writeLocal(sim, M) {
   sim.inv.copy(M).invert();
   const e = sim.inv.elements, p = sim.pos;
-  const { side, bodyW, zLo, zHi, nb, bin } = sim.collider;
+  const { side, bodyW, zLo, zHi, nb, bin, top } = sim.collider;
   for (const { attr, start, count } of sim.ranges) {
     const a = attr.array;
     for (let j = 0; j < count; j++) {
@@ -222,11 +317,11 @@ function writeLocal(sim, M) {
       const lz = e[2] * x + e[6] * y + e[10] * z + e[14];
       const sw = side[start + j];
       if (sw) {
-        const fb = (SHIRT_TOP - ly) / bin - 0.5, b0 = Math.floor(fb), t = fb - b0;
+        const fb = (top - ly) / bin - 0.5, b0 = Math.floor(fb), t = fb - b0;
         const bi = Math.round(fb);
         if (b0 >= 0 && b0 + 1 < nb && bodyW[b0] > 0 && bodyW[b0 + 1] > 0 && lz > zLo[bi] - 0.01 && lz < zHi[bi] + 0.01) {
           const sg = sw < 0 ? -1 : 1;
-          const wall = bodyW[b0] + (bodyW[b0 + 1] - bodyW[b0]) * t + 0.006;
+          const wall = bodyW[b0] + (bodyW[b0 + 1] - bodyW[b0]) * t + 0.015; // 1.5 cm: evita parpadeo entre manga y torso
           // la manga se apoya sobre el torso en vez de atravesarlo (proporcional al peso de manga: transición suave)
           if (sg * lx < wall) lx += sg * (wall - sg * lx) * Math.abs(sw);
         }

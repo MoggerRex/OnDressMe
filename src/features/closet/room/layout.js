@@ -1,8 +1,8 @@
 import * as THREE from 'three';
 
 export const RAIL_Y = 2.0;
-export const PER_RAIL = 18;
-export const SPACING = 0.3;
+export const PER_RAIL = 14;
+export const SPACING = 0.4; // separación entre ganchos: las prendas no se tocan
 export const RAIL_LEN = PER_RAIL * SPACING;
 // Orden de navegación con ←/→: izquierda, fondo, derecha. Las prendas miran hacia el centro del cuarto.
 export const RAILS = [
@@ -15,7 +15,7 @@ const FILL = [1, 0, 2]; // la barra del fondo se llena primero
 
 const slotX = (n) => (n - (PER_RAIL - 1) / 2) * SPACING;
 
-// shortcut: pasadas 54 prendas los huecos se reutilizan (se solapan); agregar más barras al llegar a ese límite.
+// shortcut: pasadas 42 prendas los huecos se reutilizan (se solapan); agregar más barras al llegar a ese límite.
 export function placeItems(items) {
   return items.map((_, i) => ({ rail: FILL[Math.floor(i / PER_RAIL) % FILL.length], x: slotX(i % PER_RAIL) }));
 }
