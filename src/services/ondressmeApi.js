@@ -38,20 +38,30 @@ async function requestGlb(endpoint, options) {
   return { blob, response };
 }
 
-export async function generateAvatar(imageFile) {
-  const formData = new FormData();
-  formData.append('image', imageFile);
-  const { blob, response } = await requestGlb('/generate-3d', {
-    method: 'POST',
-    body: formData,
-  });
+async function requestAvatar(endpoint, formData) {
+  const { blob, response } = await requestGlb(endpoint, { method: 'POST', body: formData });
   return {
     blob,
     avatarId: response.headers.get('x-avatar-id'),
+    shape: JSON.parse(response.headers.get('x-body-shape') || 'null'),
+    shapeSource: response.headers.get('x-body-shape-source'),
   };
 }
 
-export async function generateGarment(meshFile, avatarId, garmentType = 'tshirt', fit = 'regular') {
+export async function generateAvatar(imageFile) {
+  const formData = new FormData();
+  formData.append('image', imageFile);
+  return requestAvatar('/generate-3d', formData);
+}
+
+export async function adjustAvatar(avatarId, shape) {
+  const formData = new FormData();
+  formData.append('avatar_id', avatarId);
+  formData.append('shape', JSON.stringify(shape));
+  return requestAvatar('/adjust-avatar', formData);
+}
+
+export async function generateGarment(meshFile, avatarId, garmentType = 'tshirt', fit = 'regular', edits = null) {
   if (!avatarId) {
     throw new Error('Genera de nuevo el maniquí para vincular la prenda.');
   }
@@ -61,6 +71,7 @@ export async function generateGarment(meshFile, avatarId, garmentType = 'tshirt'
   formData.append('avatar_id', avatarId);
   formData.append('garment_type', garmentType);
   formData.append('fit', fit);
+  if (edits) formData.append('edits', JSON.stringify(edits));
   const { blob, response } = await requestGlb('/generate-garment', {
     method: 'POST',
     body: formData,
@@ -75,6 +86,24 @@ export async function generateGarment(meshFile, avatarId, garmentType = 'tshirt'
     garmentId,
     cached: response.headers.get('x-garment-cached') === 'true',
   };
+}
+
+export async function inspectGarment(meshFile, avatarId, garmentType, fit) {
+  const formData = new FormData();
+  formData.append('garment_mesh', meshFile);
+  formData.append('avatar_id', avatarId || '');
+  formData.append('garment_type', garmentType);
+  formData.append('fit', fit);
+  let response;
+  try {
+    response = await fetch(`${API_BASE_URL}/garment-patterns`, { method: 'POST', body: formData });
+  } catch {
+    throw new Error('No se pudo conectar con FastAPI para analizar la prenda.');
+  }
+  if (!response.ok) throw await responseError(response);
+  const data = await response.json();
+  const bytes = Uint8Array.from(atob(data.pieces_glb), (char) => char.charCodeAt(0));
+  return { ...data, piecesBlob: new Blob([bytes], { type: 'model/gltf-binary' }) };
 }
 
 export async function listWardrobe(avatarId) {

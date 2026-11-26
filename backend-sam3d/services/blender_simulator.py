@@ -13,7 +13,16 @@ import trimesh
 
 from services.body_skeleton import body_without_arms
 from services.body_volume import BodyVolume, resolve_overlaps
-from services.garment_pipeline import LOWER_GARMENT_TYPES, UPPER_GARMENT_TYPES
+from services.garment_pipeline import (
+    LOWER_GARMENT_TYPES,
+    UPPER_GARMENT_TYPES,
+    _body_torso_profile,
+    _densify_scene,
+    read_garment_scene,
+)
+from services.patterns.analyzer import from_scene
+from services.patterns.segmenter import segment
+from services.patterns.sewing import sew_on_body
 
 logger = logging.getLogger(__name__)
 
@@ -80,6 +89,53 @@ def _resolve_arm_overlaps(
     if len(fixed) < 12 or fixed[:4] != b"glTF":
         raise GarmentSimulationError("No se pudo exportar la prenda corregida.")
     return fixed, resolved
+
+
+def sew_shirt_on_body(
+    contents: bytes,
+    filename: str,
+    body_mesh: trimesh.Trimesh,
+    body_landmarks: dict[str, np.ndarray],
+    fit: str = "regular",
+    edits: dict | None = None,
+) -> tuple[bytes, dict, int]:
+    """Cut the shirt into its pieces and sew them on the avatar.
+
+    Returns (GLB with the uploaded topology and materials, metrics,
+    intersecting triangle pairs). Raises SegmentationError when the pieces
+    cannot be identified, so the caller can use the older fitting.
+    """
+    scene = read_garment_scene(contents, filename)[0]
+    _densify_scene(scene, 0.03)  # only very coarse meshes
+    mesh = from_scene(scene)
+    segmentation = segment(mesh)
+    body_vertices = np.asarray(body_mesh.vertices, dtype=np.float64)
+    torso_height = _body_torso_profile(body_vertices, body_landmarks)[1]
+    scale_y = float(torso_height / np.ptp(mesh.vertices[:, 1]))
+    try:
+        final, report = sew_on_body(
+            _find_blender(), mesh, segmentation, body_mesh, body_landmarks, scale_y, fit, edits
+        )
+    except RuntimeError as error:
+        raise GarmentSimulationError(str(error)) from error
+
+    offset = 0
+    for node in scene.graph.nodes_geometry:
+        matrix, name = scene.graph[node]
+        geometry = scene.geometry[name]
+        count = len(geometry.vertices)
+        geometry.vertices = trimesh.transform_points(final[offset : offset + count], np.linalg.inv(matrix))
+        offset += count
+    metrics = {
+        "garment_type_method": "sewn_pieces",
+        "fit_pattern_method": segmentation.method,
+        "fit_pattern_pieces": len(segmentation.pieces),
+        "fit_pattern_edits": ",".join(sorted(edits or {})),
+        "fit_ease": fit,
+        "seam_gap_median": report.get("seam_gap_median", 0.0),
+        "seam_gap_p95": report.get("seam_gap_p95", 0.0),
+    }
+    return bytes(scene.export(file_type="glb")), metrics, int(report.get("penetration_triangle_pairs", 0))
 
 
 def simulate_static_garment(

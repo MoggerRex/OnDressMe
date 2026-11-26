@@ -55,3 +55,18 @@ Cada pie se mide en la malla del cuerpo: su huella (vértices más bajos) da el 
 - **Short y pantalón** (`services/leg_fit.py`): cada pierna se escala por niveles al grosor del muslo del avatar × holgura, se mantiene un hueco entre ambas piernas, y la entrepierna de la prenda se sube a la del cuerpo (antes colgaba ~7 cm más abajo y dejaba un panel entre las piernas). En Blender también se fija la costura de la entrepierna.
 - **Camiseta sin mangas**: el ancho sale del torso a la altura de la axila (hombro − 6 % de la altura), el hueco de la prenda se alinea con la axila del avatar y `keep_off_arms` mantiene el borde de la sisa fuera del tubo del brazo sin arrastrarlo hacia el costado (eso creaba "aletas"). En el solapado posterior el empuje se limita a ~3 cm.
 - **Manga larga**: el radio de la manga sigue la holgura elegida.
+
+## Ajuste de camisas con avatar real (hombre_guapo.jpeg) y prendas de `Ropa_buena`
+
+Probado con un avatar generado por SAM 3D Body (keypoints reales) y las prendas `Short1.obj`, `Pantalon.glb`, `Camisa_sin_mangas.obj`, `Camisa_manga_larga.obj`, `camisa_manga_corta_1.obj` y `camisa_manga_corta_2.obj`, en ajuste `tight`, `regular` y `loose`.
+
+Problemas encontrados y correcciones:
+
+- **Ancho del torso de la camisa** (`_garment_torso_core`): las mangas que cuelgan hasta el dobladillo contaban como torso y la camisa quedaba escalada y descentrada (media camisa fuera del cuerpo). Ahora se mide el grupo central de tela de la banda del dobladillo, separado por huecos.
+- **Mangas** (`sleeve_fit.py`): el eje recto de la manga se sustituye por la línea de centros de sus secciones (mangas curvas en pose A), el largo se conserva (manga corta queda corta, larga llega a la muñeca), el radio se mide solo en el tubo del brazo (la mano y el hombro ya no inflan el puño) y el hombro envuelve el deltoides. Ahora también se usa en `tshirt`.
+- **Mallas de pocos polígonos** (`_densify_scene`): se subdividen (conservando UV) antes de doblar las mangas.
+- **Torso por niveles** (`torso_fit.py`): por debajo de la axila cada nivel de la camisa se ajusta a la sección del torso del avatar (sin brazos) × (1 + `SECTION_EASE` × holgura). Elimina la forma de caja y los faldones sobre los brazos; `tight/regular/loose` cambian de verdad la silueta.
+- **Antes de simular** (`body_volume.py`): se sacan de los brazos y de la axila cerrada los vértices de la camisa y se acercan al cuerpo las "alas" de tela que flotan sobre los hombros (`pull_in`, distancia máxima según el ajuste).
+- Pantalón y short no necesitaron cambios con este avatar; sin mangas solo cambió la holgura por niveles.
+
+Verificación: 65 pruebas (`python -m unittest discover -s tests`), 0 vértices dentro del cuerpo tras la simulación en todas las prendas y ajustes de camisa (el pantalón y el short dejan 10–27 vértices dentro, ≈0.3 %).

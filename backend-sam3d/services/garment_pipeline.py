@@ -8,7 +8,13 @@ import numpy as np
 import trimesh
 
 from services.body_skeleton import arm_vertex_mask, has_arm_bones, without_arms
+from services.patterns.analyzer import from_scene
+from services.patterns.editor import apply_edits
+from services.patterns.segmenter import SegmentationError, segment
+from services.patterns.validation import validate
+from services.body_volume import BodyVolume, resolve_overlaps
 from services.leg_fit import body_crotch_y, fit_leg_sections, garment_crotch_y
+from services.torso_fit import fit_torso_sections
 from services.sleeve_fit import keep_off_arms, retarget_sleeves
 from services.garment_rig import (
     lookup_vertex_weights,
@@ -25,6 +31,8 @@ SUPPORTED_GARMENT_TYPES = UPPER_GARMENT_TYPES | LOWER_GARMENT_TYPES | {"shoes"}
 FIT_MULTIPLIERS = {"tight": 0.2, "regular": 1.0, "loose": 2.0}
 # Ease added over the body, per garment type, at the "regular" fit.
 TORSO_EASE = {"tshirt": 0.20, "longsleeve": 0.20, "tank": 0.06}
+# Ease of the level-by-level torso fit (share of the avatar's section, times looseness).
+SECTION_EASE = {"tshirt": 0.12, "longsleeve": 0.12, "tank": 0.10}
 HIP_EASE = 0.12
 LEG_EASE = {"pants": 0.06, "shorts": 0.14}
 SHORTS_HEM_ABOVE_KNEE = 0.12  # hem height as a share of the knee-to-hip distance
@@ -40,6 +48,8 @@ class GarmentBuildResult:
     scene: trimesh.Scene
     metrics: dict[str, int | float | str]
     warnings: tuple[str, ...]
+    # (GarmentMesh as uploaded, Segmentation) when pieces were requested.
+    pattern: tuple | None = None
 
 
 @dataclass(frozen=True)
@@ -887,6 +897,43 @@ def read_garment_scene(contents: bytes, filename: str, require_upright: bool = T
     return scene, mesh_format, vertex_count, face_count, garment_bounds, garment_extents
 
 
+def _densify_scene(scene: trimesh.Scene, edge_fraction: float = 0.014) -> int:
+    """Subdivide coarse garment meshes so sleeves can bend smoothly.
+
+    Low-poly garments (a few hundred triangles) tear when their sleeves are
+    bent onto the arm. Each pass splits every triangle in four and carries the
+    UV coordinates along. Returns the number of vertices added.
+    """
+    added = 0
+    for geometry in scene.geometry.values():
+        if not isinstance(geometry, trimesh.Trimesh):
+            continue
+        size = float(np.ptp(geometry.vertices, axis=0).max())
+        for _ in range(2):
+            edges = geometry.vertices[geometry.edges_unique]
+            median = float(np.median(np.linalg.norm(edges[:, 0] - edges[:, 1], axis=1)))
+            if median <= edge_fraction * size or len(geometry.faces) > 60000:
+                break
+            visual = geometry.visual
+            uv = getattr(visual, "uv", None)
+            attributes = {"uv": np.asarray(uv)} if uv is not None else None
+            before = len(geometry.vertices)
+            result = trimesh.remesh.subdivide(
+                np.asarray(geometry.vertices), np.asarray(geometry.faces), vertex_attributes=attributes
+            )
+            vertices, faces = result[0], result[1]
+            if attributes is not None and isinstance(visual, trimesh.visual.TextureVisuals):
+                geometry.vertices, geometry.faces = vertices, faces
+                geometry.visual = trimesh.visual.TextureVisuals(
+                    uv=result[2]["uv"], material=visual.material
+                )
+            else:
+                geometry.vertices, geometry.faces = vertices, faces
+                geometry.visual = trimesh.visual.ColorVisuals(geometry)
+            added += len(vertices) - before
+    return added
+
+
 def _garment_torso_core(scene: trimesh.Scene):
     """Bounds of a long-sleeve shirt without its sleeves, from the hem width.
 
@@ -902,12 +949,21 @@ def _garment_torso_core(scene: trimesh.Scene):
     )
     y_low, y_range = points[:, 1].min(), float(np.ptp(points[:, 1]))
     best = None
-    for start in np.linspace(0.04, 0.30, 8):
+    for start in np.linspace(0.03, 0.30, 10):
         band = points[np.abs((points[:, 1] - y_low) / y_range - start) <= 0.03]
-        if len(band) >= 20:
-            width = float(np.ptp(band[:, 0]))
-            if best is None or width < best[0]:
-                best = (width, float((band[:, 0].min() + band[:, 0].max()) / 2))
+        if len(band) < 20:
+            continue
+        # Sleeves that hang down reach the hem band: keep only the cluster of
+        # fabric around the middle (a gap between clusters = space between the
+        # torso and a hanging sleeve).
+        xs = np.sort(band[:, 0])
+        cuts = np.flatnonzero(np.diff(xs) > 0.10 * y_range)
+        groups = np.split(xs, cuts + 1)
+        median = float(np.median(xs))
+        group = next((g for g in groups if g[0] <= median <= g[-1]), max(groups, key=len))
+        width = float(group[-1] - group[0])
+        if len(group) >= 20 and width > 0 and (best is None or width < best[0]):
+            best = (width, float((group[0] + group[-1]) / 2))
     if best is None or best[0] <= 0:
         raise GarmentPipelineError("No se pudo medir el ancho del torso de la camisa.")
     width, center = best
@@ -946,6 +1002,7 @@ def load_garment_mesh(
     garment_type: str = "tshirt",
     body_landmarks: dict[str, np.ndarray] | None = None,
     fit: str = "regular",
+    edits: dict[str, dict[str, float]] | None = None,
 ) -> GarmentBuildResult:
     fit = fit.strip().lower()
     if fit not in FIT_MULTIPLIERS:
@@ -971,14 +1028,29 @@ def load_garment_mesh(
         garment_extents,
     ) = read_garment_scene(contents, filename)
 
+    bend_sleeves = garment_type in ("longsleeve", "tshirt") and has_arm_bones(body_landmarks)
     if garment_type == "longsleeve":
         if not has_arm_bones(body_landmarks):
             raise GarmentPipelineError(
                 "La camisa de manga larga necesita los huesos de los brazos (hombro, codo y muñeca) del avatar."
             )
+    if bend_sleeves:
+        _densify_scene(scene)
         # Scale by the torso only; the sleeves are bent onto the arm bones later.
         garment_bounds, _, _ = _garment_torso_core(scene)
         garment_extents = garment_bounds[1] - garment_bounds[0]
+
+    pattern = None
+    if edits is not None:
+        if garment_type not in UPPER_GARMENT_TYPES:
+            raise GarmentPipelineError("La modificación por piezas solo está disponible para camisas.")
+        # Pieces are found on the uploaded shape; the fitting below keeps the
+        # vertex order, so the labels stay valid.
+        garment_data = from_scene(scene)
+        try:
+            pattern = (garment_data, segment(garment_data))
+        except SegmentationError as error:
+            raise GarmentPipelineError(str(error)) from error
 
     body_vertices = _validate_body_mesh(body_mesh)
     arm_mask = arm_vertex_mask(body_vertices, body_landmarks)
@@ -1453,8 +1525,34 @@ def load_garment_mesh(
         )
         fitted_world_vertices = np.split(cleared, np.cumsum(sizes)[:-1])
 
+    torso_fitted = False
+    if (
+        garment_type in UPPER_GARMENT_TYPES
+        and body_landmarks
+        and "left-shoulder" in body_landmarks
+        and "right-shoulder" in body_landmarks
+    ):
+        # Resize the shirt's torso to the avatar's, level by level: tight/regular/
+        # loose then change the silhouette, and the sides stop flaring over the arms.
+        sizes = [len(vertices) for vertices in fitted_world_vertices]
+        torso_body, _ = without_arms(body_vertices, body_landmarks, body_height)
+        shoulder_y = float(
+            np.mean([body_landmarks["left-shoulder"][1], body_landmarks["right-shoulder"][1]])
+        )
+        shaped, torso_fitted = fit_torso_sections(
+            np.concatenate(fitted_world_vertices),
+            torso_body,
+            center_x,
+            target_width / 2.0,
+            float(target_y_low),
+            shoulder_y - 0.06 * body_height,
+            body_height,
+            SECTION_EASE[garment_type] * looseness,
+        )
+        fitted_world_vertices = np.split(shaped, np.cumsum(sizes)[:-1])
+
     sleeves_fitted = 0
-    if garment_type == "longsleeve":
+    if bend_sleeves:
         sizes = [len(vertices) for vertices in fitted_world_vertices]
         bent, sleeve_info = retarget_sleeves(
             np.concatenate(fitted_world_vertices),
@@ -1464,9 +1562,20 @@ def load_garment_mesh(
             body_landmarks,
             body_height,
             radius_margin=1.06 + 0.10 * looseness,
+            # Sleeve length scales like the garment's height, not like its width.
+            length_scale=scale_y / scale_x,
         )
         fitted_world_vertices = np.split(bent, np.cumsum(sizes)[:-1])
         sleeves_fitted = sleeve_info["sleeves_fitted"]
+
+    if pattern is not None:
+        # Applied after the automatic fit, which would otherwise undo them.
+        sizes = [len(vertices) for vertices in fitted_world_vertices]
+        garment_data, segmentation = pattern
+        before = np.concatenate(fitted_world_vertices)
+        edited = apply_edits(before, garment_data.faces, garment_data.weld, segmentation, edits)
+        edit_report = validate(before, edited, garment_data.faces, garment_data.weld)
+        fitted_world_vertices = np.split(edited, np.cumsum(sizes)[:-1])
 
     for node, world_vertices in zip(scene_nodes, fitted_world_vertices):
         node_transform, geometry_name = scene.graph[node]
@@ -1474,6 +1583,26 @@ def load_garment_mesh(
         scene.geometry[geometry_name].vertices = trimesh.transform_points(
             world_vertices,
             inverse_transform,
+        )
+
+    if bend_sleeves:
+        armpit_y = (
+            float(np.mean([body_landmarks["left-shoulder"][1], body_landmarks["right-shoulder"][1]]))
+            - 0.06 * body_height
+        )
+        # Start the simulation with the sleeves already outside the arms and the
+        # closed armpit; Blender then only has to drape the cloth.
+        resolve_overlaps(
+            scene,
+            BodyVolume(body_vertices, np.asarray(body_mesh.faces)),
+            margin=max(0.004, body_height * 0.0025),
+            min_y=body_min_y + 0.5 * body_height,
+            # A widened sleeve must not be pulled back onto the arm.
+            max_gap=body_height * (0.007 + 0.008 * looseness)
+            + 0.05 * max(
+                [0.0] + [e["width"] - 1.0 for k, e in (edits or {}).items() if k.startswith("sleeve")]
+            ),
+            gap_min_y=armpit_y,
         )
 
     fit_region = "cadera y piernas" if is_lower else "torso"
@@ -1527,7 +1656,13 @@ def load_garment_mesh(
     }
     metrics["fit_ease"] = fit
     metrics["fit_legs_fitted"] = legs_fitted
-    if garment_type == "longsleeve":
+    if pattern is not None and edits:
+        metrics["fit_pattern_method"] = pattern[1].method
+        metrics["fit_pattern_edits"] = ",".join(sorted(edits))
+        metrics["fit_pattern_seam_gap"] = round(edit_report["max_seam_gap"], 6)
+        metrics["fit_pattern_flipped_faces"] = edit_report["flipped_faces"]
+    metrics["fit_torso_sections"] = bool(torso_fitted)
+    if bend_sleeves:
         metrics["fit_sleeves_fitted"] = sleeves_fitted
         if sleeves_fitted < 2:
             warnings.append(
@@ -1592,4 +1727,5 @@ def load_garment_mesh(
         scene=scene,
         metrics=metrics,
         warnings=tuple(warnings),
+        pattern=pattern,
     )

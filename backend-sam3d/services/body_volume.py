@@ -34,7 +34,8 @@ class BodyVolume:
         steps = max(int(round(radius / self.pitch)), 1) if close_gaps else 0
 
         mesh = trimesh.Trimesh(vertices, np.asarray(faces), process=False)
-        margin = steps + 3
+        # Room around the body so far-away cloth (wings) still reads a true distance.
+        margin = steps + 3 + int(round(0.06 * height / self.pitch))
         solid, self.origin = self._voxelize(mesh, margin)
         base = solid
         if steps:
@@ -58,7 +59,7 @@ class BodyVolume:
     def _voxelize(self, mesh: trimesh.Trimesh, margin: int):
         """Filled voxel grid from surface samples (independent of triangle size)."""
         count = int(min(max(mesh.area / (self.pitch * 0.5) ** 2, 1000), 3_000_000))
-        samples = mesh.sample(count)
+        samples = mesh.sample(count, seed=0)  # same body, same result
         samples = np.vstack((samples, mesh.vertices))
         low = samples.min(axis=0) - margin * self.pitch
         shape = np.ceil((samples.max(axis=0) - low) / self.pitch).astype(int) + margin + 1
@@ -117,21 +118,53 @@ class BodyVolume:
             moved[active] = True
         return points, int(moved.sum())
 
+    def pull_in(self, points: np.ndarray, max_gap: float, min_y: float) -> tuple[np.ndarray, int]:
+        """Displacement that brings points farther than `max_gap` from the body back to it.
+
+        Only points above `min_y` move. Returns (displacement, moved count).
+        """
+        points = np.asarray(points, dtype=np.float64)
+        index = self._index(points)
+        distance = self.sdf[index].astype(np.float64)
+        far = (distance > max_gap) & (points[:, 1] > min_y)
+        displacement = np.zeros_like(points)
+        if far.any():
+            direction = self.gradient[index].astype(np.float64)[far]
+            direction /= np.maximum(np.linalg.norm(direction, axis=1, keepdims=True), 1e-9)
+            displacement[far] = -direction * (distance[far] - max_gap)[:, None]
+        return displacement, int(far.sum())
+
 
 def _smooth_displacement(geometry, displacement: np.ndarray, rounds: int = 4) -> np.ndarray:
-    """Average each vertex's displacement with its mesh neighbours (no spikes)."""
+    """Average each vertex's displacement with its mesh neighbours (no spikes).
+
+    Garment meshes often repeat vertices along seams (separate panels, UV
+    cuts). Vertices at the same position are treated as one, so they receive the
+    same displacement and the seam cannot open.
+    """
     from scipy import sparse
 
-    edges = np.asarray(geometry.edges_unique)
-    count = len(displacement)
+    vertices = np.asarray(geometry.vertices, dtype=np.float64)
+    size = max(float(np.ptp(vertices, axis=0).max()), 1e-9)
+    _, group = np.unique(np.round(vertices / (size * 1e-5)).astype(np.int64), axis=0, return_inverse=True)
+    group = group.ravel()
+    groups = int(group.max()) + 1
+    members = np.bincount(group, minlength=groups)[:, None].astype(np.float64)
+
+    edges = group[np.asarray(geometry.edges_unique)]
+    edges = edges[edges[:, 0] != edges[:, 1]]
     adjacency = sparse.coo_matrix(
         (np.ones(len(edges) * 2), (np.r_[edges[:, 0], edges[:, 1]], np.r_[edges[:, 1], edges[:, 0]])),
-        shape=(count, count),
+        shape=(groups, groups),
     ).tocsr()
+    adjacency.data[:] = 1.0  # duplicate edges count once
     degree = np.maximum(np.asarray(adjacency.sum(axis=1)).ravel(), 1.0)[:, None]
+    merged = np.zeros((groups, displacement.shape[1]))
+    np.add.at(merged, group, displacement)
+    merged /= members
     for _ in range(rounds):
-        displacement = 0.5 * displacement + 0.5 * (adjacency @ displacement) / degree
-    return displacement
+        merged = 0.5 * merged + 0.5 * (adjacency @ merged) / degree
+    return merged[group]
 
 
 def resolve_overlaps(
@@ -140,6 +173,8 @@ def resolve_overlaps(
     margin: float,
     min_y: float,
     max_push: float | None = None,
+    max_gap: float | None = None,
+    gap_min_y: float = -np.inf,
 ) -> int:
     """Push every garment vertex out of the closed body volume, in place.
 
@@ -152,6 +187,12 @@ def resolve_overlaps(
         geometry = scene.geometry[name]
         world = trimesh.transform_points(np.asarray(geometry.vertices, dtype=np.float64), matrix)
         fixed, count = volume.push_out(world, margin, min_y, max_push=max_push)
+        if max_gap is not None:
+            # Fabric hovering far above the shoulders (wings) is pulled back onto them.
+            pull, far = volume.pull_in(fixed, max_gap, gap_min_y)
+            if far:
+                fixed = fixed + pull
+                count = max(count, far)
         if not count:
             continue
         fixed = world + _smooth_displacement(geometry, fixed - world)

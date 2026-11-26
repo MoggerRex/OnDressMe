@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import re
 import threading
@@ -13,8 +14,16 @@ from pathlib import Path, PureWindowsPath
 import numpy as np
 import trimesh
 
-from services.blender_simulator import simulate_static_garment
-from services.garment_pipeline import load_garment_mesh
+from services.blender_simulator import sew_shirt_on_body, simulate_static_garment
+from services.garment_pipeline import (
+    UPPER_GARMENT_TYPES,
+    GarmentBuildResult,
+    load_garment_mesh,
+)
+from services.patterns.segmenter import SegmentationError
+from services.patterns.sewing import SewingError
+
+logger = logging.getLogger(__name__)
 
 
 _ITEM_ID_PATTERN = re.compile(r"^[0-9a-f]{32}$")
@@ -253,12 +262,16 @@ def process_or_reuse_garment(
     filename: str,
     garment_type: str,
     fit: str = "regular",
+    edits: dict[str, dict[str, float]] | None = None,
 ) -> GarmentLibraryResult:
     body_id = body_fingerprint(body_mesh, body_landmarks)
     # The same mesh with another fit is a different garment (cached apart).
-    source_id = source_fingerprint(
-        mesh_contents if fit == "regular" else mesh_contents + b"|fit=" + fit.encode()
-    )
+    variant = mesh_contents if fit == "regular" else mesh_contents + b"|fit=" + fit.encode()
+    if edits:
+        variant += b"|edits=" + json.dumps(edits, sort_keys=True).encode()
+    if garment_type in UPPER_GARMENT_TYPES:
+        variant += b"|sewn-v1"  # shirts saved by the older method are redone
+    source_id = source_fingerprint(variant)
     lock_key = f"{body_id}:{garment_type}:{source_id}"
 
     with _processing_lock(lock_key):
@@ -272,15 +285,32 @@ def process_or_reuse_garment(
                 cached=True,
             )
 
-        build = load_garment_mesh(
-            mesh_contents,
-            filename,
-            body_mesh,
-            garment_type,
-            body_landmarks=body_landmarks,
-            fit=fit,
-        )
-        if garment_type == "shoes":
+        sewn = None
+        sewing_failure = ""
+        if garment_type in UPPER_GARMENT_TYPES and body_landmarks:
+            try:
+                sewn = sew_shirt_on_body(
+                    mesh_contents, filename, body_mesh, body_landmarks, fit, edits
+                )
+            except (SegmentationError, SewingError) as error:
+                sewing_failure = str(error)
+                logger.warning("No se pudo coser por piezas (%s); se usa el ajuste directo.", error)
+        if sewn is None:
+            build = load_garment_mesh(
+                mesh_contents,
+                filename,
+                body_mesh,
+                garment_type,
+                body_landmarks=body_landmarks,
+                fit=fit,
+                edits=edits,
+            )
+        if sewn is not None:
+            glb, metrics, penetration_pairs = sewn
+            build = GarmentBuildResult(scene=None, metrics=metrics, warnings=())
+            build.metrics["simulation"] = "blender_sewn"
+            build.metrics["penetration_check"] = "triangle_surface_intersections"
+        elif garment_type == "shoes":
             # Los zapatos son rígidos: ya quedaron ajustados a los huesos del pie.
             glb = bytes(build.scene.export(file_type="glb"))
             penetration_pairs = 0
@@ -296,6 +326,9 @@ def process_or_reuse_garment(
             build.metrics["penetration_check"] = "triangle_surface_intersections"
         build.metrics["penetration_triangle_pairs"] = penetration_pairs
         warnings = build.warnings
+        if sewing_failure:
+            build.metrics["sewing_failure"] = sewing_failure
+            warnings += (f"No se pudo coser por piezas: {sewing_failure} Se usó el ajuste directo.",)
         if penetration_pairs:
             warnings += (
                 "La comprobación BVH encontró "
@@ -306,6 +339,10 @@ def process_or_reuse_garment(
             ensure_ascii=True,
             separators=(",", ":"),
         )
+        if edits:
+            # Told apart from the unmodified garment in the wardrobe.
+            stem, dot, suffix = filename.rpartition(".")
+            filename = f"{stem}_modificada{dot}{suffix}" if dot else f"{filename}_modificada"
         item, file_path = save_garment(
             body_id,
             source_id,

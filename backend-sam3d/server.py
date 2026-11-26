@@ -1,4 +1,5 @@
 import io
+import json
 import logging
 import os
 import shutil
@@ -25,12 +26,20 @@ sys.path.append(repo_path)
 from sam_3d_body import SAM3DBodyEstimator, load_sam_3d_body_hf
 from sam_3d_body.metadata.mhr70 import mhr_names
 from services.blender_simulator import GarmentSimulationError
+from services.body_shape import (
+    NEUTRAL,
+    measure_factors,
+    person_mask,
+    sculpt,
+)
 from services.body_skeleton import BODY_LANDMARK_NAMES
 from services.garment_pipeline import (
     GarmentPipelineError,
     MAX_GARMENT_MESH_BYTES,
     SUPPORTED_GARMENT_TYPES,
 )
+from services.patterns.editor import parse_edits
+from services.patterns.service import inspect_shirt
 from services.garment_library import (
     GarmentLibraryError,
     body_fingerprint,
@@ -53,6 +62,8 @@ app.add_middleware(
     allow_headers=["*"],
     expose_headers=[
         "X-Avatar-Id",
+        "X-Body-Shape",
+        "X-Body-Shape-Source",
         "X-Pipeline-Info",
         "X-Garment-Id",
         "X-Garment-Cached",
@@ -64,6 +75,10 @@ _avatar_cache: OrderedDict[
     str, tuple[trimesh.Trimesh, dict[str, np.ndarray]]
 ] = OrderedDict()
 _avatar_cache_lock = threading.Lock()
+# Predicted (unsculpted) body of recent avatars, to re-shape them on request:
+# id -> (vertices, faces, landmarks, skin colour)
+_avatar_bases: OrderedDict[str, tuple] = OrderedDict()
+_MAX_AVATAR_BASES = 12
 
 
 def _remember_avatar(
@@ -194,9 +209,89 @@ def orient_body_keypoints(
     return oriented_keypoints
 
 
+def _estimate_body_shape(output, faces, image_rgb):
+    """Factors that make the predicted body follow the photo, and where they came from."""
+    try:
+        mask = person_mask(image_rgb)
+        if mask is None:
+            return dict(NEUTRAL), "sin-segmentacion"
+        translation = np.asarray(output["pred_cam_t"], dtype=np.float64)
+        keypoints = np.asarray(output["pred_keypoints_3d"], dtype=np.float64) + translation
+        factors = measure_factors(
+            np.asarray(output["pred_vertices"], dtype=np.float64) + translation,
+            np.asarray(faces),
+            {name: keypoints[mhr_names.index(name)] for name in BODY_LANDMARK_NAMES},
+            float(output["focal_length"]),
+            mask,
+            image_rgb,
+        )
+        return factors, "foto"
+    except Exception:
+        # A body with the predicted shape is better than no body.
+        logger.exception("No se pudo medir la complexión en la foto.")
+        return dict(NEUTRAL), "error"
+
+
+def _avatar_response(base, factors, source: str) -> FileResponse:
+    """Sculpt a predicted body, register it as a new avatar and return its GLB."""
+    base_vertices, faces, base_landmarks, skin_color = base
+    vertices = sculpt(base_vertices, np.asarray(faces), base_landmarks, factors)
+    floor = np.array([0.0, vertices[:, 1].min(), 0.0])
+    vertices = vertices - floor
+    landmarks = {name: point - floor for name, point in base_landmarks.items()}
+
+    vertex_colors = np.empty((len(vertices), 4), dtype=np.uint8)
+    vertex_colors[:, :3] = skin_color
+    vertex_colors[:, 3] = 255
+    mesh = trimesh.Trimesh(vertices=vertices, faces=faces, process=False)
+    mesh.visual.vertex_colors = vertex_colors
+    avatar_id = _remember_avatar(vertices, faces, landmarks)
+    with _avatar_cache_lock:
+        _avatar_bases[avatar_id] = base
+        while len(_avatar_bases) > _MAX_AVATAR_BASES:
+            _avatar_bases.popitem(last=False)
+
+    output_dir = tempfile.mkdtemp(prefix="sam3d-body-")
+    output_path = os.path.join(output_dir, "avatar_output.glb")
+    mesh.export(output_path, include_normals=True)
+    return FileResponse(
+        output_path,
+        media_type="model/gltf-binary",
+        filename="avatar_output.glb",
+        headers={
+            "X-Avatar-Id": avatar_id,
+            "X-Body-Shape": json.dumps(factors),
+            "X-Body-Shape-Source": source,
+        },
+        background=BackgroundTask(shutil.rmtree, output_dir),
+    )
+
+
+@app.post("/adjust-avatar")
+async def adjust_avatar(avatar_id: str = Form(...), shape: str = Form(...)):
+    """Re-shape an avatar by hand: {"chest": 1.1, "bust": 1.3, ...}."""
+    try:
+        requested = json.loads(shape)
+        if not isinstance(requested, dict) or any(
+            name not in NEUTRAL or isinstance(value, bool) or not isinstance(value, (int, float))
+            for name, value in requested.items()
+        ):
+            raise ValueError("Complexión no válida.")
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    with _avatar_cache_lock:
+        base = _avatar_bases.get(avatar_id)
+    if base is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Genera de nuevo el maniquí: el backend ya no conserva ese cuerpo.",
+        )
+    factors = {**NEUTRAL, **{name: float(value) for name, value in requested.items()}}
+    return await run_in_threadpool(_avatar_response, base, factors, "manual")
+
+
 @app.post("/generate-3d")
 async def generate_3d(image: UploadFile = File(...)):
-    output_dir = None
     try:
         img_bytes = await image.read()
         img = Image.open(io.BytesIO(img_bytes)).convert("RGB")
@@ -216,40 +311,20 @@ async def generate_3d(image: UploadFile = File(...)):
             outputs[0]["pred_keypoints_3d"],
             outputs[0]["pred_vertices"],
         )
-        landmark_names = BODY_LANDMARK_NAMES
         body_landmarks = {
             name: keypoints[mhr_names.index(name)]
-            for name in landmark_names
+            for name in BODY_LANDMARK_NAMES
         }
 
         img_array = np.array(img)
-        skin_color = estimate_skin_color(img_array)
-        vertex_colors = np.empty((len(vertices), 4), dtype=np.uint8)
-        vertex_colors[:, :3] = skin_color
-        vertex_colors[:, 3] = 255
-
-        mesh = trimesh.Trimesh(vertices=vertices, faces=faces, process=False)
-        mesh.visual.vertex_colors = vertex_colors
-        avatar_id = _remember_avatar(vertices, faces, body_landmarks)
-
-        output_dir = tempfile.mkdtemp(prefix="sam3d-body-")
-        output_path = os.path.join(output_dir, "avatar_output.glb")
-        mesh.export(output_path, include_normals=True)
-
-        return FileResponse(
-            output_path,
-            media_type="model/gltf-binary",
-            filename="avatar_output.glb",
-            headers={"X-Avatar-Id": avatar_id},
-            background=BackgroundTask(shutil.rmtree, output_dir),
+        base = (vertices, faces, body_landmarks, estimate_skin_color(img_array))
+        factors, source = await run_in_threadpool(
+            _estimate_body_shape, outputs[0], faces, img_array
         )
+        return await run_in_threadpool(_avatar_response, base, factors, source)
     except HTTPException:
-        if output_dir and os.path.exists(output_dir):
-            shutil.rmtree(output_dir)
         raise
     except Exception as e:
-        if output_dir and os.path.exists(output_dir):
-            shutil.rmtree(output_dir)
         logger.exception("Error procesando la imagen.")
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -260,6 +335,7 @@ async def generate_garment(
     avatar_id: str = Form(...),
     garment_type: str = Form(default="tshirt"),
     fit: str = Form(default="regular"),
+    edits: str = Form(default=""),
     image: UploadFile | None = File(default=None),
 ):
     try:
@@ -284,6 +360,11 @@ async def generate_garment(
                 status_code=422,
                 detail="Tipo de prenda no admitido. Usa 'tshirt', 'tank', 'longsleeve', 'pants', 'shorts' o 'shoes'.",
             )
+
+        try:
+            piece_edits = parse_edits(json.loads(edits)) if edits.strip() else {}
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
 
         body_mesh, body_landmarks = _cached_avatar(avatar_id)
         if body_mesh is None or body_landmarks is None:
@@ -310,6 +391,7 @@ async def generate_garment(
             garment_mesh.filename or "",
             garment_type,
             fit.strip().lower(),
+            piece_edits or None,
         )
 
         return FileResponse(
@@ -334,6 +416,35 @@ async def generate_garment(
         raise HTTPException(status_code=500, detail=str(error)) from error
     except Exception as error:
         logger.exception("Error procesando la prenda.")
+        raise HTTPException(status_code=500, detail=str(error)) from error
+
+
+@app.post("/garment-patterns")
+async def garment_patterns(
+    garment_mesh: UploadFile = File(...),
+    avatar_id: str = Form(default=""),
+    garment_type: str = Form(default="tshirt"),
+    fit: str = Form(default="regular"),
+):
+    """Segmentation, 2D patterns and body measurements of an uploaded shirt."""
+    mesh_bytes = await garment_mesh.read(MAX_GARMENT_MESH_BYTES + 1)
+    if len(mesh_bytes) > MAX_GARMENT_MESH_BYTES:
+        raise HTTPException(status_code=413, detail="La malla de prenda supera el límite de 64 MB.")
+    body_mesh, body_landmarks = _cached_avatar(avatar_id) if avatar_id else (None, None)
+    try:
+        return await run_in_threadpool(
+            inspect_shirt,
+            mesh_bytes,
+            garment_mesh.filename or "",
+            garment_type.strip().lower(),
+            body_mesh,
+            body_landmarks,
+            fit.strip().lower(),
+        )
+    except GarmentPipelineError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    except Exception as error:
+        logger.exception("Error analizando la prenda.")
         raise HTTPException(status_code=500, detail=str(error)) from error
 
 

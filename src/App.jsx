@@ -9,7 +9,10 @@ import {
 } from 'lucide-react';
 import MannequinScene from './features/mannequin/MannequinScene';
 import ClosetDrawer from './features/closet/ClosetDrawer';
+import PatternPanel from './features/patterns/PatternPanel';
+import BodyShapePanel from './features/body/BodyShapePanel';
 import {
+  adjustAvatar,
   generateAvatar,
   generateGarment,
   getGarmentModel,
@@ -66,6 +69,8 @@ export default function App() {
   const [garmentBusy, setGarmentBusy] = useState(false);
   const [error, setError] = useState('');
   const [garmentNotice, setGarmentNotice] = useState('');
+  const [piecesBlob, setPiecesBlob] = useState(null);
+  const [bodyShape, setBodyShape] = useState(null);
   const garmentLoadInProgress = useRef(false);
   const garmentBlobCache = useRef(new Map());
 
@@ -78,6 +83,26 @@ export default function App() {
     blob,
   }));
 
+  async function handleAdjustAvatar(shape) {
+    if (!avatarId) return;
+    setAvatarBusy(true);
+    setError('');
+    try {
+      const result = await adjustAvatar(avatarId, shape);
+      setAvatarBlob(result.blob);
+      setAvatarId(result.avatarId);
+      setBodyShape({ factors: result.shape, source: result.shapeSource });
+      // Garments were fitted to the previous body.
+      setGarmentModels({});
+      garmentBlobCache.current.clear();
+      setWardrobeItems(await listWardrobe(result.avatarId));
+    } catch (requestError) {
+      setError(requestError.message);
+    } finally {
+      setAvatarBusy(false);
+    }
+  }
+
   async function handleGenerateAvatar() {
     if (!bodyPhoto) return;
     setAvatarBusy(true);
@@ -86,6 +111,7 @@ export default function App() {
       const result = await generateAvatar(bodyPhoto);
       setAvatarBlob(result.blob);
       setAvatarId(result.avatarId);
+      setBodyShape(result.shape ? { factors: result.shape, source: result.shapeSource } : null);
       setWardrobeItems([]);
       setGarmentModels({});
       garmentBlobCache.current.clear();
@@ -113,13 +139,14 @@ export default function App() {
     }
   }
 
-  async function handleGenerateGarment() {
+  async function handleGenerateGarment(edits = null) {
     if (!garmentMeshFile || !avatarId) return;
     setGarmentBusy(true);
     setError('');
     setGarmentNotice('');
     try {
-      const result = await generateGarment(garmentMeshFile, avatarId, garmentType, garmentFit);
+      const result = await generateGarment(garmentMeshFile, avatarId, garmentType, garmentFit, edits);
+      setPiecesBlob(null);
       const pipelineInfo = JSON.parse(result.pipelineInfo || '{}');
       const intersectionPairs = pipelineInfo.metrics?.penetration_triangle_pairs;
       if (!Number.isSafeInteger(intersectionPairs) || intersectionPairs < 0) {
@@ -135,15 +162,21 @@ export default function App() {
       cacheGarmentBlob(garmentBlobCache.current, savedGarment.id, result.blob);
       if (!garmentModels[savedGarment.id]) {
         setLoadingGarmentId(savedGarment.id);
-        setGarmentModels((current) => (
-          current[savedGarment.id]
-            ? current
-            : { ...current, [savedGarment.id]: result.blob }
-        ));
+        setGarmentModels((current) => {
+          if (current[savedGarment.id]) return current;
+          // A modified shirt replaces the one being worn; both would overlap.
+          const replaced = new Set(
+            edits ? updatedItems.filter((item) => item.garment_type === garmentType).map((item) => item.id) : [],
+          );
+          const kept = Object.entries(current).filter(([id]) => !replaced.has(id));
+          return { ...Object.fromEntries(kept), [savedGarment.id]: result.blob };
+        });
       }
       setGarmentNotice(
         result.cached
           ? 'Se reutilizó el GLB guardado para este maniquí; no fue necesario repetir la simulación.'
+          : pipelineInfo.metrics?.sewing_failure
+            ? `No se pudo coser por piezas (${pipelineInfo.metrics.sewing_failure}) Se usó el ajuste directo.`
           : intersectionPairs > 0
             ? `La comprobación de superficies detectó ${intersectionPairs} pares de triángulos intersectados; revisa el ajuste.`
             : 'La simulación de Blender terminó; la comprobación superficial no detectó cruces de triángulos.',
@@ -231,6 +264,7 @@ export default function App() {
                 setBodyPhoto(event.target.files?.[0] || null);
                 setAvatarId(null);
                 setAvatarBlob(null);
+                setBodyShape(null);
                 setWardrobeItems([]);
                 setGarmentModels({});
                 garmentBlobCache.current.clear();
@@ -252,6 +286,14 @@ export default function App() {
               )}
               {avatarBusy ? 'Generando maniquí...' : 'Generar con SAM 3D Body'}
             </button>
+            {bodyShape && avatarId && (
+              <BodyShapePanel
+                key={avatarId}
+                shape={bodyShape}
+                busy={avatarBusy || garmentBusy || Boolean(loadingGarmentId)}
+                onApply={handleAdjustAvatar}
+              />
+            )}
           </div>
 
           <div className="rounded-2xl border border-slate-800 bg-slate-900/70 p-5">
@@ -321,7 +363,7 @@ export default function App() {
             )}
             <button
               type="button"
-              onClick={handleGenerateGarment}
+              onClick={() => handleGenerateGarment()}
               disabled={!garmentMeshFile || !avatarId || avatarBusy || garmentBusy || Boolean(loadingGarmentId)}
               className="mt-3 flex min-h-11 w-full items-center justify-center gap-2 rounded-xl bg-violet-600 px-4 py-2.5 text-sm font-semibold transition hover:bg-violet-500 disabled:cursor-not-allowed disabled:opacity-50"
             >
@@ -341,6 +383,19 @@ export default function App() {
               resultante. GLB conserva materiales; OBJ se admite para geometría.
             </p>
           </div>
+
+          {garmentMeshFile && ['tshirt', 'tank', 'longsleeve'].includes(garmentType) && (
+            <PatternPanel
+              key={`${garmentMeshFile.name}-${garmentMeshFile.lastModified}-${garmentType}-${garmentFit}-${avatarId}`}
+              file={garmentMeshFile}
+              avatarId={avatarId}
+              garmentType={garmentType}
+              fit={garmentFit}
+              busy={avatarBusy || garmentBusy || Boolean(loadingGarmentId)}
+              onShowPieces={setPiecesBlob}
+              onRebuild={handleGenerateGarment}
+            />
+          )}
 
           {avatarId && (
             <ClosetDrawer
@@ -404,7 +459,8 @@ export default function App() {
           )}
           <MannequinScene
             avatarUrl={avatarUrl}
-            garments={sceneGarments}
+            hideAvatar={Boolean(piecesBlob)}
+            garments={piecesBlob ? [{ id: 'pieces', blob: piecesBlob }] : sceneGarments}
             onDropGarment={handleDropGarment}
             onGarmentLoaded={handleGarmentLoaded}
           />
