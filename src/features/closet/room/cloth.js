@@ -21,6 +21,39 @@ function segment(a, b, r, mat) {
   return m;
 }
 
+// Normales suaves recalculadas sobre la forma colgada final: promedio por posición (aunque los vértices estén
+// duplicados por costuras/UVs). Evita rayas de sombreado donde un giro parcial dejó normales que no coinciden con la tela.
+function smoothNormals(parts) {
+  const key = (x, y, z) => `${Math.round(x * 1e4)},${Math.round(y * 1e4)},${Math.round(z * 1e4)}`;
+  const acc = new Map();
+  const a = new THREE.Vector3(), b = new THREE.Vector3(), c = new THREE.Vector3(), n = new THREE.Vector3();
+  const tri = (p, ia, ib, ic) => {
+    a.fromBufferAttribute(p, ia); b.fromBufferAttribute(p, ib); c.fromBufferAttribute(p, ic);
+    n.subVectors(c, b).cross(a.clone().sub(b)); // normal de la cara, ponderada por su área
+    for (const i of [ia, ib, ic]) {
+      const k = key(p.getX(i), p.getY(i), p.getZ(i));
+      const v = acc.get(k) || acc.set(k, new THREE.Vector3()).get(k);
+      v.add(n);
+    }
+  };
+  parts.forEach(({ geo }) => {
+    const p = geo.attributes.position, idx = geo.index;
+    const count = idx ? idx.count : p.count;
+    for (let t = 0; t < count; t += 3) {
+      if (idx) tri(p, idx.getX(t), idx.getX(t + 1), idx.getX(t + 2));
+      else tri(p, t, t + 1, t + 2);
+    }
+  });
+  parts.forEach(({ geo }) => {
+    const p = geo.attributes.position, nr = geo.attributes.normal;
+    for (let i = 0; i < p.count; i++) {
+      const v = acc.get(key(p.getX(i), p.getY(i), p.getZ(i)));
+      if (v && v.lengthSq() > 0) { n.copy(v).normalize(); nr.setXYZ(i, n.x, n.y, n.z); }
+    }
+    nr.needsUpdate = true;
+  });
+}
+
 // Gancho: gancho curvo sobre la barra + dos brazos hasta los hombros + travesaño (como el dibujo).
 function buildHanger(tipX, tipY, neckY) {
   const mat = new THREE.MeshStandardMaterial({ color: '#202026', roughness: 0.4, metalness: 0.4 });
@@ -73,6 +106,7 @@ export function buildGarment(scene, cut = 'tshirt') {
   const shape = (CUTS[cut] || CUTS.tshirt).pose({ parts, each, h, top: SHIRT_TOP });
   const { goal, side, hw, margin } = shape;
   let { sleeveBottom } = shape;
+  if (shape.smoothNormals) smoothNormals(parts);
   const total = goal.length / 3;
 
   // Gancho fijo: se sube/baja la prenda para que sus hombros queden 4.5 cm sobre las puntas del gancho

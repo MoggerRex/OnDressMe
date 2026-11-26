@@ -17,7 +17,7 @@ export function pose({ parts, each, h, top }, fit = {}) {
   const ratio = (maxX - hw) / h;
 
   // Caída de mangas: girar sobre el hombro hasta que cuelguen (cortas ~66°, largas ~88° bajo la horizontal)
-  const px = hw * 0.9, py = top - 0.07 * h;
+  const px = hw * (fit.pivot ?? 0.9), py = top - 0.07 * h;
   let theta = 0;
   if (ratio > 0.04) {
     let sy = 0, n = 0;
@@ -46,7 +46,10 @@ export function pose({ parts, each, h, top }, fit = {}) {
       const sw = Number(isSleeve(x, y)); // 1 = manga, 0 = torso (un corte puede devolver valores intermedios para suavizar)
       if (w > 0 && sw > 0) side[o / 3] = (x < 0 ? -1 : 1) * smoothstep(w, 0, 0.5) * sw;
       // cuánto gira cada punto: 0 en el torso, 1 en la manga. `fit.ramp` ensancha esa transición (hombro más redondo)
-      const rw = fit.ramp ? smoothstep(Math.abs(x), hw * fit.ramp[0], hw * fit.ramp[1]) * sw : w;
+      let rw = fit.ramp ? smoothstep(Math.abs(x), hw * fit.ramp[0], hw * fit.ramp[1]) * sw : w;
+      // el torso por debajo del pivote no gira: al girar sobre el pivote esa tela se movería hacia adentro y arriba,
+      // doblándose sobre el pecho (crestas diagonales del cuello a la axila). Solo gira la tapa del hombro y la manga.
+      if (fit.keepTorso) rw *= 1 - smoothstep(py - y, 0, fit.keepTorso) * (1 - smoothstep(Math.abs(x), hw, hw * 1.2));
       if (theta && rw) {
         const sg = x < 0 ? -1 : 1, f = -sg * theta * rw, cs = Math.cos(f), sn = Math.sin(f);
         const dx = x - sg * px, dy = y - py;

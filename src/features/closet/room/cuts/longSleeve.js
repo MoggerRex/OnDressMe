@@ -41,11 +41,16 @@ export function pose(ctx) {
   }
 
   return {
+    smoothNormals: true, // el hombro ancho (SHOULDER_RAMP) deja rayas de sombreado si no se recalculan
     ...tshirt.pose(ctx, {
       hw: hw || undefined,
       sleeveBottom,
       target: SLEEVE_DROP,
       ramp: SHOULDER_RAMP,
+      // el pivote del hombro va donde empieza la transición: así ningún punto del hombro sube al girar la manga
+      // (si el pivote queda más afuera, la tela entre ambos se levanta y forma crestas puntiagudas junto al cuello)
+      pivot: SHOULDER_RAMP[0],
+      keepTorso: 0.1, // m bajo el pivote en que el torso deja de girar
       // es manga lo que está sobre la axila o separado del torso (el antebrazo y el puño de la pose "A")
       // el costado del torso pasa a "manga" de forma gradual alrededor de la axila (8 cm abajo → 4 cm arriba):
       // un corte brusco ahí doblaba las costillas en escalón al apoyarse la manga
