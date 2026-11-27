@@ -15,14 +15,23 @@ const FILL = [1, 0, 2]; // la barra del fondo se llena primero
 
 const slotX = (n) => (n - (PER_RAIL - 1) / 2) * SPACING;
 
-// shortcut: pasadas 42 prendas los huecos se reutilizan (se solapan); agregar más barras al llegar a ese límite.
-export function placeItems(items) {
-  return items.map((_, i) => ({ rail: FILL[Math.floor(i / PER_RAIL) % FILL.length], x: slotX(i % PER_RAIL) }));
+export const FLOOR_Z = 0.25; // m: los zapatos van en el piso, un poco hacia el cuarto bajo las prendas colgadas
+
+// Prendas colgadas y zapatos en el piso llevan cada uno su propia fila de lugares (n = lugar dentro de su barra).
+// shortcut: pasadas 42 prendas (o 42 zapatos) los lugares se reutilizan (se solapan); agregar barras al llegar a ese límite.
+export function placeItems(items, isFloor) {
+  const count = { hang: 0, floor: 0 };
+  return items.map((item) => {
+    const floor = isFloor(item);
+    const i = count[floor ? 'floor' : 'hang']++;
+    const n = i % PER_RAIL;
+    return { rail: FILL[Math.floor(i / PER_RAIL) % FILL.length], x: slotX(n), n, floor };
+  });
 }
 
-export function railRange(placed, rail) {
-  const xs = placed.filter((p) => p.rail === rail).map((p) => p.x);
-  return xs.length ? [Math.min(...xs), Math.max(...xs)] : [0, 0];
+export function railRange(placed, rail, floor = false) {
+  const xs = placed.filter((p) => p.rail === rail && p.floor === floor).map((p) => p.x);
+  return xs.length ? [Math.min(...xs), Math.max(...xs)] : null;
 }
 
 // Punto en el marco local de la barra (x a lo largo, z hacia el cuarto) -> mundo.

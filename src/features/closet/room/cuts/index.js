@@ -1,5 +1,7 @@
 import * as tshirt from './tshirt';
 import * as longSleeve from './longSleeve';
+import * as pants from './pants';
+import * as shoes from './shoes';
 
-// Un archivo por corte de prenda: cada uno decide cómo cuelga ese corte (mangas, hombros, etc.)
-export const CUTS = { tshirt, longSleeve };
+// Un archivo por tipo de prenda: cada uno decide cómo cuelga (mangas, hombros, etc.) o, si es `floor`, va en el piso
+export const CUTS = { tshirt, longSleeve, pants, shoes };
