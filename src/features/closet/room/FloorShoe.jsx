@@ -31,7 +31,8 @@ function ShoeModel({ scene, x, interactive, held, heldPos, draggable, onGrab, se
     // hover: se levanta un poco del piso; seleccionado: sube y se acerca a la cámara
     // arrastrado: sigue al puntero y queda levantado como en hover
     p.x = damp(p.x, selected ? scroll.cur : held ? heldPos.x : x, held ? 12 : 7, dt);
-    p.y = damp(p.y, selected ? 0.33 : (hovered && interactive) || held ? 0.06 : 0, 7, dt);
+    const ty = selected ? 0.33 : (hovered && interactive) || held ? 0.06 : 0;
+    p.y = damp(p.y, ty, ty < p.y ? 3.5 : 7, dt); // baja más despacio de lo que sube: se posa suave
     p.z = damp(p.z, selected ? 0.65 : 0, 7, dt); // misma distancia a la cámara (0.47 m) que antes; ClosetRoom adelanta la cámara igual
     const cur = yaw.current.rotation.y, goal = selected ? steps * QUARTER : 0;
     yaw.current.rotation.y = damp(cur, goal + 2 * Math.PI * Math.round((cur - goal) / (2 * Math.PI)), 8, dt);

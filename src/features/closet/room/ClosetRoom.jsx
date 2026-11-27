@@ -13,6 +13,7 @@ const W = 8, D = 6, H = 3;
 // Cámara estática: en 'overview' mira la barra elegida desde el centro; en 'rail'/'detail' se acerca a ella y sigue a scroll.cur.
 function CameraRig({ mode, rail, floor, scroll, motion }) {
   const camera = useThree((s) => s.camera);
+  const size = useThree((s) => s.size);
   const pos = useRef(null);
   const look = useRef(new THREE.Vector3());
 
@@ -24,12 +25,16 @@ function CameraRig({ mode, rail, floor, scroll, motion }) {
 
     const near = mode !== 'overview';
     // en detalle la cámara se aleja 30 cm de la barra (la prenda abierta se adelanta lo mismo): deja espacio para el desenfoque
-    const back = mode === 'detail' ? 0.3 : 0;
+    // pantalla vertical (celular): la vista es angosta, así que en vista general y de barra la cámara se aleja para ver más
+    // prendas. En detalle no: la prenda abierta ya cabe y el desenfoque depende de esa distancia.
+    const portrait = size.width < size.height;
+    const back = mode === 'detail' ? 0.3 : portrait ? 0.6 : 0;
     // piso (zapatos): la cámara baja y mira la fila de zapatos bajo la barra
-    const wantPos = !near ? new THREE.Vector3(0, 1.65, 0.6)
+    // vista general en vertical: se retrocede frente a la barra elegida (5.2 m de ella, sin salir del cuarto)
+    const wantPos = !near ? (portrait ? railToWorld(rail, 0, -0.35, 5.2) : new THREE.Vector3(0, 1.65, 0.6))
       // en detalle de zapatos cámara y zapato se adelantan 20 cm más: el desenfoque queda delante de las prendas
       // colgadas (cuyo dobladillo baja hasta la altura de la cámara) y detrás del zapato al girarlo
-      : floor ? railToWorld(rail, scroll.cur, -RAIL_Y + 0.42, FLOOR_Z + 0.62 + (back && back + 0.2))
+      : floor ? railToWorld(rail, scroll.cur, -RAIL_Y + 0.42, FLOOR_Z + 0.62 + (mode === 'detail' ? back + 0.2 : back))
       : railToWorld(rail, scroll.cur, -0.35, 1.6 + back);
     const wantLook = !near ? railToWorld(rail, 0, -0.3, 0)
       : floor ? railToWorld(rail, scroll.cur, -RAIL_Y + 0.12 + (mode === 'detail' ? 0.3 : 0), FLOOR_Z)

@@ -38,7 +38,9 @@ function HangingModel({ scene, cut, x, interactive, held, heldPos, draggable, on
     const px = p.x;
     // seleccionada: sale de la barra y se coloca frente a la cámara (que está en scroll.cur); arrastrada: sigue al puntero
     p.x = damp(p.x, selected ? scroll.cur : held ? heldPos.x : x, held ? 12 : 7, dt);
-    p.y = damp(p.y, selected ? detailY : lifted ? 0.15 : 0, 7, dt);
+    const ty = selected ? detailY : lifted ? 0.15 : 0;
+    // sube con la misma suavidad de siempre; al soltarla baja más despacio (antes caía de golpe)
+    p.y = damp(p.y, ty, ty < p.y ? 3.5 : 7, dt);
     p.z = damp(p.z, selected ? 0.75 : 0, 7, dt); // a 1.15 m de la cámara (que en detalle está a 1.9 m de la barra)
 
     const cur = yaw.current.rotation.y;
