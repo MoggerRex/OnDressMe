@@ -18,13 +18,13 @@ class SkipOnError extends Component {
 }
 
 // Jerarquía: place (posición en la barra / sacada) > pivot (balanceo del gancho) > yaw (perfil / giro) > gancho + tela
-function HangingModel({ scene, cut, x, interactive, selected, steps, scroll, motion, onSelect, onHover }) {
+function HangingModel({ scene, cut, x, interactive, held, heldPos, draggable, onGrab, selected, steps, scroll, motion, onSelect, onHover }) {
   const place = useRef();
   const pivot = useRef();
   const yaw = useRef();
   const swing = useRef({ ax: 0, az: 0, vx: 0.15, vz: 0.1 }); // golpe inicial: se ve viva al colgarla
   const [hovered, setHovered] = useState(false);
-  useCursor(hovered && interactive);
+  useCursor(hovered && (interactive || draggable) && !held);
 
   const cloth = useMemo(() => buildGarment(scene, cut), [scene, cut]);
   // en detalle, una prenda más larga (pantalón) sube más para quedar completa y centrada frente a la cámara
@@ -34,9 +34,10 @@ function HangingModel({ scene, cut, x, interactive, selected, steps, scroll, mot
   useFrame((_, rawDt) => {
     const dt = Math.min(rawDt, 0.05);
     const p = place.current.position;
-    const lifted = hovered && interactive;
-    // seleccionada: sale de la barra y se coloca frente a la cámara (que está en scroll.cur)
-    p.x = damp(p.x, selected ? scroll.cur : x, 7, dt);
+    const lifted = (hovered && interactive) || held; // presionada (arrastrando) queda levantada como en hover
+    const px = p.x;
+    // seleccionada: sale de la barra y se coloca frente a la cámara (que está en scroll.cur); arrastrada: sigue al puntero
+    p.x = damp(p.x, selected ? scroll.cur : held ? heldPos.x : x, held ? 12 : 7, dt);
     p.y = damp(p.y, selected ? detailY : lifted ? 0.15 : 0, 7, dt);
     p.z = damp(p.z, selected ? 0.75 : 0, 7, dt); // a 1.15 m de la cámara (que en detalle está a 1.9 m de la barra)
 
@@ -49,6 +50,7 @@ function HangingModel({ scene, cut, x, interactive, selected, steps, scroll, mot
     const s = swing.current;
     const cd = selected ? 9 : 4.5; // un gancho real se asienta en 1-2 balanceos
     s.vz += -motion.vel * 1.5 * dt; // el carrusel arrastra la ropa
+    if (held) s.vz += -(p.x - px) * 1.5; // al arrastrarla se mece con su propio movimiento
     s.vx += (-30 * s.ax - cd * s.vx) * dt; s.ax += s.vx * dt;
     s.vz += (-30 * s.az - cd * s.vz) * dt; s.az += s.vz * dt;
     pivot.current.rotation.set(s.ax, 0, s.az);
@@ -63,7 +65,8 @@ function HangingModel({ scene, cut, x, interactive, selected, steps, scroll, mot
       position={[x, 0, 0]}
       onPointerOver={(e) => { e.stopPropagation(); setHovered(true); onHover(true); }}
       onPointerOut={() => { setHovered(false); onHover(false); }}
-      onClick={(e) => { e.stopPropagation(); if (interactive) onSelect(); }}
+      onPointerDown={onGrab}
+      onClick={(e) => { e.stopPropagation(); if (interactive && e.delta <= 4) onSelect(); }} // delta > 4 px: fue un arrastre
     >
       <group ref={pivot}>
         <group ref={yaw} rotation-y={PROFILE}>

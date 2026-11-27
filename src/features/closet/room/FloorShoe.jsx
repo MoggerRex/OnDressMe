@@ -16,11 +16,11 @@ class SkipOnError extends Component {
 }
 
 // Jerarquía: place (lugar en el piso / sacado) > yaw (giro en vista detalle) > zapato estático
-function ShoeModel({ scene, x, interactive, selected, steps, scroll, onSelect, onHover }) {
+function ShoeModel({ scene, x, interactive, held, heldPos, draggable, onGrab, selected, steps, scroll, onSelect, onHover }) {
   const place = useRef();
   const yaw = useRef();
   const [hovered, setHovered] = useState(false);
-  useCursor(hovered && interactive);
+  useCursor(hovered && (interactive || draggable) && !held);
 
   const shoe = useMemo(() => buildShoe(scene), [scene]);
   useEffect(() => () => shoe.dispose(), [shoe]);
@@ -29,9 +29,10 @@ function ShoeModel({ scene, x, interactive, selected, steps, scroll, onSelect, o
     const dt = Math.min(rawDt, 0.05);
     const p = place.current.position;
     // hover: se levanta un poco del piso; seleccionado: sube y se acerca a la cámara
-    p.x = damp(p.x, selected ? scroll.cur : x, 7, dt);
-    p.y = damp(p.y, selected ? 0.33 : hovered && interactive ? 0.06 : 0, 7, dt);
-    p.z = damp(p.z, selected ? 0.45 : 0, 7, dt);
+    // arrastrado: sigue al puntero y queda levantado como en hover
+    p.x = damp(p.x, selected ? scroll.cur : held ? heldPos.x : x, held ? 12 : 7, dt);
+    p.y = damp(p.y, selected ? 0.33 : (hovered && interactive) || held ? 0.06 : 0, 7, dt);
+    p.z = damp(p.z, selected ? 0.65 : 0, 7, dt); // misma distancia a la cámara (0.47 m) que antes; ClosetRoom adelanta la cámara igual
     const cur = yaw.current.rotation.y, goal = selected ? steps * QUARTER : 0;
     yaw.current.rotation.y = damp(cur, goal + 2 * Math.PI * Math.round((cur - goal) / (2 * Math.PI)), 8, dt);
   });
@@ -42,7 +43,8 @@ function ShoeModel({ scene, x, interactive, selected, steps, scroll, onSelect, o
       position={[x, 0, 0]}
       onPointerOver={(e) => { e.stopPropagation(); setHovered(true); onHover(true); }}
       onPointerOut={() => { setHovered(false); onHover(false); }}
-      onClick={(e) => { e.stopPropagation(); if (interactive) onSelect(); }}
+      onPointerDown={onGrab}
+      onClick={(e) => { e.stopPropagation(); if (interactive && e.delta <= 4) onSelect(); }} // delta > 4 px: fue un arrastre
     >
       <group ref={yaw}>
         <primitive object={shoe.root} />

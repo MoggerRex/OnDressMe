@@ -3,12 +3,12 @@ import { Canvas } from '@react-three/fiber';
 import { Search, Shirt, Trash2, Upload } from 'lucide-react';
 import ClosetRoom, { isFloor } from './ClosetRoom';
 import { CUTS } from './cuts';
-import { RAILS, SPACING, START_RAIL, placeItems, railRange } from './layout';
+import { RAILS, SPACING, START_RAIL, freeSlot, placeItems, railRange } from './layout';
 
 const HINTS = {
-  overview: '← → cambia de barra · ↑ acercarse',
-  rail: '← → o scroll recorre la barra · clic en una prenda para verla · ↓ zapatos / alejarse · Esc alejarse',
-  floor: '← → o scroll recorre los zapatos · clic en uno para verlo · ↑ prendas · ↓ / Esc alejarse',
+  overview: '← → cambia de barra · ↑ acercarse · arrastra una prenda para cambiarla de lugar',
+  rail: '← → o scroll recorre la barra · clic en una prenda para verla · arrástrala para cambiarla de lugar · ↓ zapatos / alejarse · Esc alejarse',
+  floor: '← → o scroll recorre los zapatos · clic en uno para verlo · arrástralo para moverlo · ↑ prendas · ↓ / Esc alejarse',
   detail: '← → gira la prenda · Esc la devuelve a la barra',
 };
 
@@ -75,8 +75,21 @@ export default function ClosetPage() {
 
   function savePending(name, cut) {
     const f = pending[0];
-    setItems((cur) => [...cur, { id: crypto.randomUUID(), name, cut, ext: f.name.slice(-3).toLowerCase(), size: f.size, url: URL.createObjectURL(f) }]);
+    setItems((cur) => [...cur, {
+      id: crypto.randomUUID(), name, cut, ext: f.name.slice(-3).toLowerCase(), size: f.size, url: URL.createObjectURL(f),
+      slot: freeSlot(cur, Boolean(CUTS[cut]?.floor), isFloor),
+    }]);
     setPending((cur) => cur.slice(1));
+  }
+
+  // Prenda soltada en otro lugar: si ahí había otra de su misma fila (colgada / piso), intercambian lugares.
+  function move(id, rail, n) {
+    setItems((cur) => {
+      const me = cur.find((i) => i.id === id);
+      if (!me || (me.slot.rail === rail && me.slot.n === n)) return cur;
+      const other = cur.find((i) => i.id !== id && isFloor(i) === isFloor(me) && i.slot.rail === rail && i.slot.n === n);
+      return cur.map((i) => (i === me ? { ...i, slot: { rail, n } } : i === other ? { ...i, slot: me.slot } : i));
+    });
   }
 
   function remove(id) {
@@ -184,6 +197,7 @@ export default function ClosetPage() {
             motion={motion}
             onSelect={(id) => setNav((n) => (n.mode === 'rail' ? { ...n, mode: 'detail', selected: id, steps: 0 } : n))}
             onHover={setHoverId}
+            onMove={move}
             onGarmentError={remove}
           />
         </Canvas>
