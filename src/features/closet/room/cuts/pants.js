@@ -3,6 +3,9 @@ import * as THREE from 'three';
 const { clamp, lerp } = THREE.MathUtils;
 
 export const label = 'Pantalón';
+// largo de pretina a dobladillo. Las playeras miden 0.8 m; un pantalón de adulto es ~1.4 veces ese largo,
+// así ambas prendas parecen de la misma persona.
+export const height = 1.15;
 
 // Los modelos de pantalón vienen con el volumen de unas piernas puestas (cadera, muslos, rodillas). Colgado de la
 // pretina, la tela cae plana y recta, así que se ajusta por franjas de 2 cm:

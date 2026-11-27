@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { CUTS } from './cuts';
 
-export const TARGET_HEIGHT = 0.8; // metros
+export const TARGET_HEIGHT = 0.8; // metros: largo de las prendas de torso (cada corte puede fijar el suyo con `height`)
 export const SHIRT_TOP = -0.13; // parte más alta de la prenda, medida desde la barra (origen)
 const { smoothstep, lerp, clamp } = THREE.MathUtils;
 // Gancho de tamaño fijo, igual para todas las prendas (medido sobre la camisa de manga corta de referencia)
@@ -90,20 +90,21 @@ export function buildGarment(scene, cut = 'tshirt') {
   parts.forEach(({ geo }) => { geo.computeBoundingBox(); box.union(geo.boundingBox); });
   const size = box.getSize(new THREE.Vector3());
   const c = box.getCenter(new THREE.Vector3());
-  const s = TARGET_HEIGHT / (size.y || 1);
+  const cutDef = CUTS[cut] || CUTS.tshirt;
+  const h = cutDef.height ?? TARGET_HEIGHT; // largo real colgado, en la misma escala para todas las prendas
+  const s = h / (size.y || 1);
   const mx = new THREE.Matrix4().makeTranslation(0, SHIRT_TOP, 0)
     .multiply(new THREE.Matrix4().makeScale(s, s, s))
     .multiply(new THREE.Matrix4().makeTranslation(-c.x, -box.max.y, -c.z));
   parts.forEach(({ geo }) => geo.applyMatrix4(mx));
 
-  const h = TARGET_HEIGHT;
   const each = (fn) => parts.forEach(({ geo }) => {
     const p = geo.attributes.position;
     for (let i = 0; i < p.count; i++) fn(p.getX(i), p.getY(i), p.getZ(i));
   });
 
   // Forma colgada según el corte de la prenda (cada corte en su propio archivo dentro de cuts/)
-  const shape = (CUTS[cut] || CUTS.tshirt).pose({ parts, each, h, top: SHIRT_TOP });
+  const shape = cutDef.pose({ parts, each, h, top: SHIRT_TOP });
   const { goal, side, hw, margin } = shape;
   let { sleeveBottom } = shape;
   if (shape.smoothNormals) smoothNormals(parts);

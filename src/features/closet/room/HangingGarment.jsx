@@ -3,7 +3,8 @@ import { useFrame, useLoader } from '@react-three/fiber';
 import { OBJLoader } from 'three/examples/jsm/loaders/OBJLoader.js';
 import { useCursor, useGLTF } from '@react-three/drei';
 import * as THREE from 'three';
-import { buildGarment, stepCloth } from './cloth';
+import { buildGarment, stepCloth, TARGET_HEIGHT } from './cloth';
+import { CUTS } from './cuts';
 
 const PROFILE = Math.PI / 2; // colgada de perfil (el frente del modelo mira a +z)
 const damp = THREE.MathUtils.damp;
@@ -26,6 +27,8 @@ function HangingModel({ scene, cut, x, interactive, selected, steps, scroll, mot
   useCursor(hovered && interactive);
 
   const cloth = useMemo(() => buildGarment(scene, cut), [scene, cut]);
+  // en detalle, una prenda más larga (pantalón) sube más para quedar completa y centrada frente a la cámara
+  const detailY = 0.22 + ((CUTS[cut]?.height ?? TARGET_HEIGHT) - TARGET_HEIGHT) / 2;
   useEffect(() => () => cloth.dispose(), [cloth]);
 
   useFrame((_, rawDt) => {
@@ -34,7 +37,7 @@ function HangingModel({ scene, cut, x, interactive, selected, steps, scroll, mot
     const lifted = hovered && interactive;
     // seleccionada: sale de la barra y se coloca frente a la cámara (que está en scroll.cur)
     p.x = damp(p.x, selected ? scroll.cur : x, 7, dt);
-    p.y = damp(p.y, selected ? 0.22 : lifted ? 0.15 : 0, 7, dt);
+    p.y = damp(p.y, selected ? detailY : lifted ? 0.15 : 0, 7, dt);
     p.z = damp(p.z, selected ? 0.75 : 0, 7, dt); // a 1.15 m de la cámara (que en detalle está a 1.9 m de la barra)
 
     const cur = yaw.current.rotation.y;
