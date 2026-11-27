@@ -10,8 +10,10 @@ export const isFloor = (item) => Boolean(CUTS[item.cut]?.floor);
 
 const W = 8, D = 6, H = 3;
 
+const OVERVIEW_DIST = 5.4; // m de la barra en vista general vertical (la pared de enfrente está a 5.7 m de la del fondo)
+
 // Cámara estática: en 'overview' mira la barra elegida desde el centro; en 'rail'/'detail' se acerca a ella y sigue a scroll.cur.
-function CameraRig({ mode, rail, floor, scroll, motion }) {
+function CameraRig({ mode, zoom, rail, floor, scroll, motion }) {
   const camera = useThree((s) => s.camera);
   const size = useThree((s) => s.size);
   const pos = useRef(null);
@@ -20,7 +22,8 @@ function CameraRig({ mode, rail, floor, scroll, motion }) {
   useFrame((_, rawDt) => {
     const dt = Math.min(rawDt, 0.05);
     const prev = scroll.cur;
-    scroll.cur = THREE.MathUtils.damp(scroll.cur, scroll.target, 5, dt);
+    // arrastrando una prenda la cámara la sigue más rápido (no se queda atrás)
+    scroll.cur = THREE.MathUtils.damp(scroll.cur, scroll.target, scroll.dragging ? 12 : 5, dt);
     motion.vel = (scroll.cur - prev) / Math.max(dt, 0.001);
 
     const near = mode !== 'overview';
@@ -28,19 +31,30 @@ function CameraRig({ mode, rail, floor, scroll, motion }) {
     // pantalla vertical (celular): la vista es angosta, así que en vista general y de barra la cámara se aleja para ver más
     // prendas. En detalle no: la prenda abierta ya cabe y el desenfoque depende de esa distancia.
     const portrait = size.width < size.height;
+    // vista general en vertical: se abre el ángulo de la cámara lo justo para ver la barra completa de pared a pared
+    const aspect = size.width / size.height;
+    const fov = mode === 'overview' && portrait
+      ? Math.min(95, THREE.MathUtils.radToDeg(2 * Math.atan((RAIL_LEN / 2 + 0.25) / (OVERVIEW_DIST * aspect))))
+      : 60;
+    if (Math.abs(camera.fov - fov) > 0.01) {
+      camera.fov = THREE.MathUtils.damp(camera.fov, fov, 4, dt);
+      camera.updateProjectionMatrix();
+    }
     const back = mode === 'detail' ? 0.3 : portrait ? 0.6 : 0;
     // piso (zapatos): la cámara baja y mira la fila de zapatos bajo la barra
-    // vista general en vertical: se retrocede frente a la barra elegida (5.2 m de ella, sin salir del cuarto)
-    const wantPos = !near ? (portrait ? railToWorld(rail, 0, -0.35, 5.2) : new THREE.Vector3(0, 1.65, 0.6))
+    // vista general en vertical: se retrocede frente a la barra elegida, casi hasta la pared de enfrente
+    const wantPos = !near ? (portrait ? railToWorld(rail, 0, -0.35, OVERVIEW_DIST) : new THREE.Vector3(0, 1.65, 0.6))
       // en detalle de zapatos cámara y zapato se adelantan 20 cm más: el desenfoque queda delante de las prendas
       // colgadas (cuyo dobladillo baja hasta la altura de la cámara) y detrás del zapato al girarlo
       : floor ? railToWorld(rail, scroll.cur, -RAIL_Y + 0.42, FLOOR_Z + 0.62 + (mode === 'detail' ? back + 0.2 : back))
+      // vista media: a medio camino entre la lejana y la cercana (se ven varias prendas)
+      : mode === 'rail' && zoom === 'mid' ? railToWorld(rail, scroll.cur, -0.4, portrait ? 3.4 : 2.6)
       : railToWorld(rail, scroll.cur, -0.35, 1.6 + back);
     const wantLook = !near ? railToWorld(rail, 0, -0.3, 0)
       : floor ? railToWorld(rail, scroll.cur, -RAIL_Y + 0.12 + (mode === 'detail' ? 0.3 : 0), FLOOR_Z)
-      : railToWorld(rail, scroll.cur, -0.35, 0);
+      : railToWorld(rail, scroll.cur, mode === 'rail' && zoom === 'mid' ? -0.45 : -0.35, 0);
     if (!pos.current) { pos.current = wantPos.clone(); look.current.copy(wantLook); }
-    const k = 1 - Math.exp(-4 * dt);
+    const k = 1 - Math.exp(-(scroll.dragging ? 12 : 4) * dt);
     pos.current.lerp(wantPos, k);
     look.current.lerp(wantLook, k);
     camera.position.copy(pos.current);
@@ -108,7 +122,7 @@ function pointerOnRail(floor) {
   return best;
 }
 
-function DragController({ drag, setDrag, held, mode, scroll, onMove }) {
+function DragController({ drag, setDrag, held, mode, railNow, scroll, onMove }) {
   const { camera, gl } = useThree();
   const pointer = useRef(null);
 
@@ -141,17 +155,27 @@ function DragController({ drag, setDrag, held, mode, scroll, onMove }) {
 
   // cada cuadro (la cámara puede estar moviéndose): rayo desde el puntero hasta la barra
   useFrame((_, rawDt) => {
+    scroll.dragging = Boolean(drag?.moved);
     if (!drag || !drag.moved || !pointer.current) return;
     const dt = Math.min(rawDt, 0.05);
-    // cerca del borde de la pantalla la vista de barra se desplaza sola para poder llevarla más lejos
-    if (mode === 'rail' && Math.abs(pointer.current.x) > 0.8) {
-      scroll.target = THREE.MathUtils.clamp(scroll.target + Math.sign(pointer.current.x) * 1.6 * dt, X_MIN, X_MAX);
+    // el dedo puede salir del cuarto (al navbar, fuera de la pantalla): se toma la orilla de la vista
+    const px = THREE.MathUtils.clamp(pointer.current.x, -1, 1), py = THREE.MathUtils.clamp(pointer.current.y, -1, 1);
+    // cerca del borde la vista de barra se desplaza sola, más rápido cuanto más cerca del borde
+    const edge = (Math.abs(px) - 0.55) / 0.45;
+    if (mode === 'rail' && edge > 0) {
+      scroll.target = THREE.MathUtils.clamp(scroll.target + Math.sign(px) * 4 * edge * dt, X_MIN, X_MAX);
     }
-    ndc.set(pointer.current.x, pointer.current.y);
+    ndc.set(px, py);
     ray.setFromCamera(ndc, camera);
     const on = pointerOnRail(drag.floor);
     if (!on) return;
     held.x = on.x;
+    // vista de barra: la prenda nunca va más rápido que la cámara; se queda dentro de lo que la cámara ve en ese momento
+    if (mode === 'rail' && on.rail === railNow) {
+      const cam = worldToRail(on.rail, camera.position);
+      const halfW = Math.max(0, cam.z * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)) * camera.aspect - 0.25);
+      held.x = THREE.MathUtils.clamp(held.x, cam.x - halfW, cam.x + halfW);
+    }
     if (on.rail !== drag.rail) setDrag({ ...drag, rail: on.rail });
   });
   return null;
@@ -178,7 +202,7 @@ function Room() {
   );
 }
 
-export default function ClosetRoom({ items, nav, scroll, motion, onSelect, onHover, onMove, onGarmentError }) {
+export default function ClosetRoom({ items, nav, scroll, motion, gesture, onSelect, onHover, onMove, onGarmentError }) {
   const placed = placeItems(items, isFloor);
   const floor = nav.level === 'floor';
   // drag: { id, rail (barra actual bajo el puntero), floor, sx, sy (inicio en pantalla), moved }; held.x: x del puntero en la barra
@@ -187,6 +211,7 @@ export default function ClosetRoom({ items, nav, scroll, motion, onSelect, onHov
   const grab = (item, pl) => (e) => {
     if (e.button !== 0 || nav.mode === 'detail') return;
     e.stopPropagation();
+    gesture.onItem = true; // el dedo agarró una prenda: ClosetPage no lo toma como deslizar
     held.x = pl.x;
     setDrag({ id: item.id, rail: pl.rail, floor: pl.floor, sx: e.nativeEvent.clientX, sy: e.nativeEvent.clientY, moved: false });
   };
@@ -197,8 +222,8 @@ export default function ClosetRoom({ items, nav, scroll, motion, onSelect, onHov
       <pointLight position={[0, 2.8, 0]} intensity={14} />
       <pointLight position={[0, 2.6, -2]} intensity={8} />
       <Room />
-      <CameraRig mode={nav.mode} rail={nav.rail} floor={floor} scroll={scroll} motion={motion} />
-      <DragController drag={drag} setDrag={setDrag} held={held} mode={nav.mode} scroll={scroll} onMove={onMove} />
+      <CameraRig mode={nav.mode} zoom={nav.zoom} rail={nav.rail} floor={floor} scroll={scroll} motion={motion} />
+      <DragController drag={drag} setDrag={setDrag} held={held} mode={nav.mode} railNow={nav.rail} scroll={scroll} onMove={onMove} />
       {/* zapatos: el seleccionado queda a ~0.6 m de la cámara y los del piso a ~1.1 m */}
       <DetailBackdrop active={nav.mode === 'detail'} dist={floor ? 0.7 : BACKDROP_DIST} />
       {RAILS.map((r, ri) => (

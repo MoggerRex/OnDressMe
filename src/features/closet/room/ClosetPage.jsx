@@ -1,12 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
 import { Canvas } from '@react-three/fiber';
-import { ChevronDown, ChevronLeft, ChevronRight, ChevronUp, PersonStanding, Search, Shirt, SquarePlus, Trash2, Upload, X } from 'lucide-react';
+import { PanelBottomClose, PanelBottomOpen, PersonStanding, Search, Shirt, SquarePlus, Trash2, Upload, X } from 'lucide-react';
 import ClosetRoom, { isFloor } from './ClosetRoom';
 import { CUTS } from './cuts';
-import { RAILS, SPACING, START_RAIL, freeSlot, placeItems, railRange } from './layout';
+import { RAILS, SPACING, START_RAIL, freeSlot, placeItems, railRange, slotX } from './layout';
 
-// Pistas de teclado (escritorio). En celular se usan los botones táctiles.
+// Pistas de teclado (escritorio). En celular se desliza el dedo (ver los gestos en ClosetPage).
 const HINTS = {
+  mid: '← → o scroll recorre la barra · clic en una prenda para verla · arrástrala para cambiarla de lugar · ↑ acercarse · ↓ / Esc alejarse',
   overview: '← → cambia de barra · ↑ acercarse · arrastra una prenda para cambiarla de lugar',
   rail: '← → o scroll recorre la barra · clic en una prenda para verla · arrástrala para cambiarla de lugar · ↓ zapatos / alejarse · Esc alejarse',
   floor: '← → o scroll recorre los zapatos · clic en uno para verlo · arrástralo para moverlo · ↑ prendas · ↓ / Esc alejarse',
@@ -65,9 +66,11 @@ export default function ClosetPage() {
   const [pending, setPending] = useState([]); // archivos esperando nombre
   const [query, setQuery] = useState('');
   const [hoverId, setHoverId] = useState(null);
-  const [panel, setPanel] = useState(false); // pop-up "Mi closet": subir y quitar prendas
+  const [panel, setPanel] = useState(false);
+  const [sheet, setSheet] = useState(true); // panel de datos abierto u oculto hacia abajo // pop-up "Mi closet": subir y quitar prendas
   // level: 'hang' (prendas colgadas) o 'floor' (zapatos en el piso bajo la barra)
-  const [nav, setNav] = useState({ mode: 'overview', rail: START_RAIL, level: 'hang', selected: null, steps: 0 });
+  // zoom (en modo 'rail'): 'mid' = vista media (se ve un tramo de la barra) o 'near' = cerca. Al entrar se empieza en la media.
+  const [nav, setNav] = useState({ mode: 'rail', zoom: 'mid', rail: START_RAIL, level: 'hang', selected: null, steps: 0 });
   const scroll = useRef({ target: 0, cur: 0 }).current; // posición de la cámara a lo largo de la barra (m)
   const motion = useRef({ vel: 0 }).current;
   const live = useRef({});
@@ -77,9 +80,12 @@ export default function ClosetPage() {
 
   function savePending(name, cut) {
     const f = pending[0];
+    const slot = freeSlot(items, Boolean(CUTS[cut]?.floor), isFloor);
+    // la cámara va hacia la prenda nueva si está en esa barra (si no, podría quedar fuera de vista)
+    if (nav.mode === 'rail' && slot.rail === nav.rail && !CUTS[cut]?.floor === (nav.level === 'hang')) scroll.target = slotX(slot.n);
     setItems((cur) => [...cur, {
       id: crypto.randomUUID(), name, cut, ext: f.name.slice(-3).toLowerCase(), size: f.size, url: URL.createObjectURL(f),
-      slot: freeSlot(cur, Boolean(CUTS[cut]?.floor), isFloor),
+      slot,
     }]);
     setPending((cur) => cur.slice(1));
   }
@@ -104,7 +110,7 @@ export default function ClosetPage() {
     const p = placed[items.indexOf(item)];
     scroll.target = p.x;
     if (p.rail !== live.current.nav.rail) scroll.cur = p.x;
-    setNav({ mode: 'detail', rail: p.rail, level: p.floor ? 'floor' : 'hang', selected: item.id, steps: 0 });
+    setNav({ mode: 'detail', zoom: 'near', rail: p.rail, level: p.floor ? 'floor' : 'hang', selected: item.id, steps: 0 });
     setQuery('');
     document.activeElement?.blur();
   }
@@ -118,22 +124,31 @@ export default function ClosetPage() {
   act.current = (k) => {
     const { nav: n, range, rangeOf } = live.current;
     // entra a una fila (prendas o zapatos) de la barra actual, empezando en su primer lugar
-    const enter = (level) => {
+    const enter = (level, zoom = 'near') => {
       const r = rangeOf(n.rail, level);
       if (!r) return false;
       scroll.target = scroll.cur = r[0];
-      setNav({ ...n, mode: 'rail', level });
+      setNav({ ...n, mode: 'rail', level, zoom });
       return true;
     };
     const dir = k === 'right' ? 1 : k === 'left' ? -1 : 0;
     if (n.mode === 'overview') {
       if (dir) setNav({ ...n, rail: Math.min(RAILS.length - 1, Math.max(0, n.rail + dir)) });
-      else if (k === 'up' && !enter('hang')) enter('floor'); // barra sin prendas: directo a los zapatos
+      // lejana -> media (al centro de la barra, aunque esté vacía)
+      else if (k === 'up') {
+        const r = rangeOf(n.rail, 'hang');
+        scroll.target = scroll.cur = r ? (r[0] + r[1]) / 2 : 0; // centrada sobre las prendas de esa barra
+        setNav({ ...n, mode: 'rail', level: 'hang', zoom: 'mid' });
+      }
     } else if (n.mode === 'rail') {
+      // orden de cercanía: lejana <-> media <-> cerca (prendas) <-> zapatos
       if (dir) scroll.target = clamp(scroll.target + dir * SPACING, range);
-      else if (k === 'up') { if (n.level === 'floor') enter('hang'); }
-      else if (k === 'down' && n.level === 'hang' && enter('floor')) { /* baja a los zapatos */ }
-      else setNav({ ...n, mode: 'overview' }); // ↓ (desde zapatos o sin zapatos) o atrás
+      else if (k === 'up') {
+        if (n.level === 'floor') enter('hang');
+        else if (n.zoom === 'mid') { scroll.target = clamp(scroll.target, range); setNav({ ...n, zoom: 'near' }); }
+      } else if (k === 'down' && n.level === 'hang' && n.zoom === 'near' && enter('floor')) { /* baja a los zapatos */ }
+      else if ((k === 'down' || k === 'back') && (n.level === 'floor' || n.zoom === 'near')) setNav({ ...n, level: 'hang', zoom: 'mid' });
+      else setNav({ ...n, mode: 'overview' }); // desde la vista media
     } else if (dir) {
       setNav({ ...n, steps: n.steps + dir });
     } else if (k === 'back') {
@@ -157,17 +172,36 @@ export default function ClosetPage() {
   const shown = items.find((i) => i.id === labelId);
   const shownPl = placed[items.indexOf(shown)];
 
-  // botones táctiles: qué hace cada flecha en el modo actual
-  const pad = nav.mode === 'detail'
-    ? [['left', ChevronLeft, 'Girar a la izquierda'], ['back', X, 'Regresar a la barra'], ['right', ChevronRight, 'Girar a la derecha']]
-    : nav.mode === 'overview'
-      ? [['left', ChevronLeft, 'Barra anterior'], ['up', ChevronUp, 'Acercarse'], ['right', ChevronRight, 'Barra siguiente']]
-      : [
-        ['left', ChevronLeft, 'Anterior'],
-        ...(nav.level === 'floor' ? [['up', ChevronUp, 'Prendas']] : []),
-        ['down', ChevronDown, nav.level === 'hang' ? 'Zapatos o alejarse' : 'Alejarse'],
-        ['right', ChevronRight, 'Siguiente'],
-      ];
+  // Gestos con el dedo sobre el cuarto (si el dedo cae sobre una prenda, esa prenda se arrastra; ver ClosetRoom):
+  //  - en la barra, deslizar a los lados recorre el carrusel siguiendo al dedo
+  //  - en vista general cambia de barra; en detalle gira la prenda
+  //  - deslizar hacia abajo avanza (acercarse / volver a las prendas); hacia arriba retrocede (zapatos / alejarse / soltar),
+  //    como jalar la vista hacia uno
+  const gesture = useRef({ onItem: false }).current;
+  const swipe = useRef(null);
+  function touchDown(e) {
+    if (e.pointerType !== 'touch') return;
+    if (gesture.onItem) { gesture.onItem = false; return; }
+    swipe.current = { id: e.pointerId, x: e.clientX, y: e.clientY, target: scroll.target, axis: null };
+  }
+  function touchMove(e) {
+    const g = swipe.current;
+    if (!g || e.pointerId !== g.id) return;
+    const dx = e.clientX - g.x, dy = e.clientY - g.y;
+    if (!g.axis && Math.hypot(dx, dy) > 12) g.axis = Math.abs(dx) > Math.abs(dy) ? 'x' : 'y';
+    // en la vista media se ve más barra: cada pixel recorre más
+    const nv = live.current.nav;
+    if (g.axis === 'x' && nv.mode === 'rail') scroll.target = clamp(g.target - dx * (nv.zoom === 'mid' ? 0.008 : 0.004), live.current.range);
+  }
+  function touchUp(e) {
+    const g = swipe.current;
+    if (!g || e.pointerId !== g.id) return;
+    swipe.current = null;
+    const dx = e.clientX - g.x, dy = e.clientY - g.y, mode = live.current.nav.mode;
+    // detalle: de derecha a izquierda gira a la derecha (como empujar la prenda), al revés que cambiar de barra
+    if (g.axis === 'x' && mode !== 'rail' && Math.abs(dx) > 40) act.current((dx < 0) === (mode === 'detail') ? 'left' : 'right');
+    if (g.axis === 'y' && Math.abs(dy) > 40) act.current(dy > 0 ? 'up' : mode === 'detail' ? 'back' : 'down');
+  }
 
   return (
     <div className="flex h-[100dvh] flex-col bg-slate-950 text-slate-100">
@@ -213,6 +247,10 @@ export default function ClosetPage() {
 
       <main
         className="relative min-h-0 flex-1 touch-none"
+        onPointerDown={touchDown}
+        onPointerMove={touchMove}
+        onPointerUp={touchUp}
+        onPointerCancel={() => { swipe.current = null; }}
         onWheel={(e) => {
           if (live.current.nav.mode === 'rail') scroll.target = clamp(scroll.target + (e.deltaX + e.deltaY) * 0.003, live.current.range);
         }}
@@ -223,6 +261,7 @@ export default function ClosetPage() {
             nav={nav}
             scroll={scroll}
             motion={motion}
+            gesture={gesture}
             onSelect={(id) => setNav((n) => (n.mode === 'rail' ? { ...n, mode: 'detail', selected: id, steps: 0 } : n))}
             onHover={setHoverId}
             onMove={move}
@@ -240,38 +279,42 @@ export default function ClosetPage() {
           </button>
         )}
 
-        {/* datos: arriba a la izquierda en escritorio; en celular abajo, sobre los botones */}
-        {shown && (
-          <section className="absolute inset-x-3 bottom-20 rounded-xl border border-slate-800 bg-slate-900/85 p-3 backdrop-blur md:inset-x-auto md:bottom-auto md:left-4 md:top-4 md:w-72 md:p-4">
-            <h2 className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-400 md:mb-3">Datos de la prenda</h2>
-            <p className="break-words font-semibold md:text-lg">{shown.name}</p>
-            <dl className="mt-2 grid grid-cols-[auto_1fr] gap-x-4 gap-y-0.5 text-xs md:mt-3 md:gap-y-1.5 md:text-sm">
+        {/* datos: en celular pegados al navbar de abajo (se pueden ocultar); en escritorio arriba a la izquierda */}
+        {shown && (sheet ? (
+          <section
+            onPointerDown={(e) => e.stopPropagation()}
+            className="absolute inset-x-0 bottom-0 rounded-t-xl border border-b-0 border-slate-800 bg-slate-900/90 px-4 pb-3 pt-2 backdrop-blur md:inset-x-auto md:bottom-auto md:left-4 md:top-4 md:w-72 md:rounded-xl md:border-b md:p-4"
+          >
+            <div className="flex items-center justify-between gap-2">
+              <h2 className="text-xs font-semibold uppercase tracking-wide text-slate-400">Datos de la prenda</h2>
+              <button type="button" aria-label="Ocultar datos de la prenda" onClick={() => setSheet(false)} className="-mr-1 rounded-lg p-1 text-slate-400 hover:bg-slate-800 hover:text-slate-100">
+                <PanelBottomClose size={18} />
+              </button>
+            </div>
+            <p className="break-words font-semibold md:mt-2 md:text-lg">{shown.name}</p>
+            <dl className="mt-1.5 grid grid-cols-[auto_1fr] gap-x-4 gap-y-0.5 text-xs md:mt-3 md:gap-y-1.5 md:text-sm">
               <dt className="text-slate-400">Tipo</dt><dd>{CUTS[shown.cut]?.label}</dd>
               <dt className="text-slate-400">Formato</dt><dd>{shown.ext.toUpperCase()} · {(shown.size / 1048576).toFixed(2)} MB</dd>
               <dt className="text-slate-400">Barra</dt><dd>{RAIL_NAMES[shownPl.rail]}{shownPl.floor ? ' (piso)' : ''}</dd>
               <dt className="text-slate-400">Posición</dt><dd>{shownPl.n + 1}</dd>
             </dl>
           </section>
-        )}
+        ) : (
+          <button
+            type="button"
+            aria-label="Mostrar datos de la prenda"
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={() => setSheet(true)}
+            className="absolute bottom-0 right-3 flex items-center gap-1.5 rounded-t-lg border border-b-0 border-slate-800 bg-slate-900/90 px-3 py-1.5 text-xs text-slate-300 backdrop-blur hover:text-slate-100 md:bottom-auto md:left-4 md:right-auto md:top-4 md:rounded-lg md:border-b"
+          >
+            <PanelBottomOpen size={18} /> Datos
+          </button>
+        ))}
 
         <p className="pointer-events-none absolute bottom-4 left-4 hidden rounded-full bg-slate-900/80 px-4 py-2 text-xs text-slate-300 md:block">
-          {HINTS[nav.mode === 'rail' && nav.level === 'floor' ? 'floor' : nav.mode]}
+          {HINTS[nav.mode !== 'rail' ? nav.mode : nav.level === 'floor' ? 'floor' : nav.zoom === 'mid' ? 'mid' : 'rail']}
         </p>
 
-        {/* controles táctiles (celular / tablet) */}
-        <div className="absolute bottom-4 left-1/2 flex -translate-x-1/2 gap-3 md:hidden">
-          {pad.map(([k, Icon, label]) => (
-            <button
-              key={k}
-              type="button"
-              aria-label={label}
-              onClick={() => act.current(k)}
-              className="flex size-12 items-center justify-center rounded-full border border-slate-700 bg-slate-900/85 text-slate-100 backdrop-blur active:bg-violet-600"
-            >
-              <Icon size={22} />
-            </button>
-          ))}
-        </div>
       </main>
 
       {/* navegación entre secciones, abajo como en una app */}
