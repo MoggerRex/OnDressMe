@@ -3,7 +3,6 @@ import { useFrame, useLoader } from '@react-three/fiber';
 import { OBJLoader } from 'three/examples/jsm/loaders/OBJLoader.js';
 import { useCursor, useGLTF } from '@react-three/drei';
 import * as THREE from 'three';
-import { stepCloth } from './cloth';
 import { buildShoe } from './cuts/shoes';
 
 const damp = THREE.MathUtils.damp;
@@ -16,7 +15,7 @@ class SkipOnError extends Component {
   render() { return this.state.failed ? null : this.props.children; }
 }
 
-// Jerarquía: place (lugar en el piso / sacado) > yaw (giro en vista detalle) > zapato (agujetas con física)
+// Jerarquía: place (lugar en el piso / sacado) > yaw (giro en vista detalle) > zapato estático
 function ShoeModel({ scene, x, interactive, selected, steps, scroll, onSelect, onHover }) {
   const place = useRef();
   const yaw = useRef();
@@ -35,10 +34,6 @@ function ShoeModel({ scene, x, interactive, selected, steps, scroll, onSelect, o
     p.z = damp(p.z, selected ? 0.45 : 0, 7, dt);
     const cur = yaw.current.rotation.y, goal = selected ? steps * QUARTER : 0;
     yaw.current.rotation.y = damp(cur, goal + 2 * Math.PI * Math.round((cur - goal) / (2 * Math.PI)), 8, dt);
-    if (shoe.sim) {
-      yaw.current.updateWorldMatrix(true, false);
-      stepCloth(shoe.sim, yaw.current.matrixWorld, dt);
-    }
   });
 
   return (

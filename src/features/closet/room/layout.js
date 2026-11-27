@@ -15,7 +15,7 @@ const FILL = [1, 0, 2]; // la barra del fondo se llena primero
 
 const slotX = (n) => (n - (PER_RAIL - 1) / 2) * SPACING;
 
-export const FLOOR_Z = 0.25; // m: los zapatos van en el piso, un poco hacia el cuarto bajo las prendas colgadas
+export const FLOOR_Z = -0.17; // m: los zapatos van en el piso bajo la barra, casi contra la pared (está a -0.3)
 
 // Prendas colgadas y zapatos en el piso llevan cada uno su propia fila de lugares (n = lugar dentro de su barra).
 // shortcut: pasadas 42 prendas (o 42 zapatos) los lugares se reutilizan (se solapan); agregar barras al llegar a ese límite.

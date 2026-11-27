@@ -111,26 +111,47 @@ export function buildGarment(scene, cut = 'tshirt') {
 
   // Gancho fijo: se sube/baja la prenda para que sus hombros queden 4.5 cm sobre las puntas del gancho
   // (el gancho va DENTRO de la prenda; solo el cuello asoma por el cuello de la camisa)
-  const tipX = TIP_X, tipY = TIP_Y, neckY = NECK_Y;
-  let top = -Infinity;
-  for (let i = 0; i < total; i++) {
-    if (Math.abs(Math.abs(goal[i * 3]) - tipX) < 0.03) top = Math.max(top, goal[i * 3 + 1]);
-  }
-  const dy = top > -Infinity ? tipY + 0.045 - top : 0;
+  const tipY = TIP_Y, neckY = NECK_Y;
+  // ¿dónde queda la prenda con un gancho de puntas en ±tx? (altura dy para los hombros y centro en profundidad hz)
+  const placeFor = (tx) => {
+    let top = -Infinity;
+    for (let i = 0; i < total; i++) if (Math.abs(Math.abs(goal[i * 3]) - tx) < 0.03) top = Math.max(top, goal[i * 3 + 1]);
+    const dy = top > -Infinity ? tipY + 0.045 - top : 0;
+    let zMin = Infinity, zMax = -Infinity;
+    for (let i = 0; i < total; i++) {
+      if (Math.abs(Math.abs(goal[i * 3]) - tx) < 0.05 && goal[i * 3 + 1] + dy > tipY) {
+        zMin = Math.min(zMin, goal[i * 3 + 2]); zMax = Math.max(zMax, goal[i * 3 + 2]);
+      }
+    }
+    return { dy, hz: zMin < zMax ? (zMin + zMax) / 2 : 0 };
+  };
+  // El gancho nunca debe atravesar la prenda: cada punto de sus brazos y travesaño tiene que quedar envuelto por tela
+  // (tela más afuera a los lados, y tela delante y detrás). Si no, el gancho se angosta hasta que quepa.
+  const fits = (tx, { dy, hz }) => {
+    const pts = [];
+    for (const t of [0.6, 0.8, 1]) for (const sg of [1, -1]) pts.push([sg * tx * t, neckY + (tipY - neckY) * t]);
+    for (const t of [0.5, 0.9]) for (const sg of [1, -1]) pts.push([sg * tx * t, tipY]);
+    return pts.every(([px, py]) => {
+      let outer = 0, zLo = Infinity, zHi = -Infinity;
+      for (let i = 0; i < total; i++) {
+        const x = goal[i * 3], y = goal[i * 3 + 1] + dy, z = goal[i * 3 + 2] - hz;
+        if (Math.abs(y - py) > 0.015) continue;
+        if (Math.sign(x) === Math.sign(px)) outer = Math.max(outer, Math.abs(x));
+        if (Math.abs(x - px) < 0.025) { zLo = Math.min(zLo, z); zHi = Math.max(zHi, z); }
+      }
+      return outer > Math.abs(px) + 0.015 && zLo < -0.008 && zHi > 0.008;
+    });
+  };
+  let tipX = TIP_X, fit = placeFor(tipX);
+  while (tipX > 0.04 && !fits(tipX, fit)) { tipX *= 0.92; fit = placeFor(tipX); }
+  const { dy, hz: hangerZ } = fit;
   if (dy) {
     for (let i = 1; i < total * 3; i += 3) goal[i] += dy;
     parts.forEach(({ geo }) => geo.translate(0, dy, 0));
   }
   const yTop = SHIRT_TOP + dy;
   sleeveBottom += dy;
-  // Centro (en profundidad) del grosor de los hombros: es donde debe quedar el gancho, no el centro de la caja del modelo
-  let zMin = Infinity, zMax = -Infinity;
-  for (let i = 0; i < total; i++) {
-    if (Math.abs(Math.abs(goal[i * 3]) - tipX) < 0.05 && goal[i * 3 + 1] > tipY) {
-      zMin = Math.min(zMin, goal[i * 3 + 2]); zMax = Math.max(zMax, goal[i * 3 + 2]);
-    }
-  }
-  const hangerZ = zMin < zMax ? (zMin + zMax) / 2 : 0;
+  // la prenda se centra en profundidad sobre el gancho (centro del grosor de los hombros/pretina, no de la caja del modelo)
   for (let i = 2; i < total * 3; i += 3) goal[i] -= hangerZ; // la prenda se centra sobre el gancho (el gancho queda sobre la barra)
   parts.forEach(({ geo }) => geo.translate(0, 0, -hangerZ));
 
